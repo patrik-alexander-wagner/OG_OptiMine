@@ -1,661 +1,574 @@
 // ==UserScript==
 // @name         OGame ROI Advisor
 // @namespace    http://tampermonkey.net/
-// @version      1.2
-// @description  Calculates the top 20 most profitable investments (Mines, Lifeform Buildings, Lifeform Techs, Plasma) based on ROI.
-// @author       belveste
-// @match        *://*.ogame.gameforge.com/game/*
+// @version      2.0
+// @description  Adds a button to OGame to calculate ROI for Mines and Lifeforms, displaying data in a 4-tab modal.
+// @author       Patrik Wagner
+// @match        https://*.ogame.gameforge.com/game/*
 // @grant        none
 // ==/UserScript==
 
 (function () {
     'use strict';
 
-    // ==========================================
-    // CONFIGURATION & CONSTANTS
-    // ==========================================
-    const CONFIG = {
-        CACHE_KEY: 'ogame_roi_advisor_data',
-        CACHE_DURATION: 1000 * 60 * 60, // 1 hour cache validation
-        DEBUG: true // Toggle for console logging
+    // --- Constants & Config ---
+    const SCRIPT_ID = 'ogame_roi_advisor';
+    const TEAMS = {
+        HUMAN: 1,
+        ROCKTAL: 2,
+        MECHA: 3,
+        KAELESH: 4
     };
 
-    const GAME_DATA = {
-        resources: {
-            metal: { baseFactor: 1.5 },
-            crystal: { baseFactor: 1.6 },
-            deuterium: { baseFactor: 1.5 }
-        },
-        lifeform_buildings: {
-            // Rock'tal Magma Forge (Boosts Metal)
-            'Magma Forge': {
-                baseCost: { metal: 10000, crystal: 8000, deuterium: 1000 },
-                costFactor: 1.4,
-                bonusType: 'metal',
-                bonusPerLevel: 0.0125 // ~1.25%
-            },
-            // Rock'tal Crystal Refinery (Boosts Crystal)
-            'Crystal Refinery': {
-                baseCost: { metal: 85000, crystal: 44000, deuterium: 25000 },
-                costFactor: 1.4,
-                bonusType: 'crystal',
-                bonusPerLevel: 0.01 // ~1%
-            },
-            // Rock'tal Deuterium Synthesizer (Direct Production)
-            'Deuterium Synthesizer': {
-                baseCost: { metal: 120000, crystal: 50000, deuterium: 20000 },
-                costFactor: 1.5,
-                productionType: 'deuterium'
-            }
-        }
-    };
-
-    function log(...args) {
-        if (CONFIG.DEBUG) console.log('[ROI Advisor]', ...args);
-    }
-
-    // ==========================================
-    // MODULE: DATA FETCHER
-    // ==========================================
+    // --- Data Fetcher ---
     class DataFetcher {
         constructor() {
-            this.state = this.loadState();
+            this.empireData = null;
+            this.lfBonuses = {};
         }
 
-        loadState() {
-            const stored = localStorage.getItem(CONFIG.CACHE_KEY);
-            if (stored) {
-                try {
-                    const parsed = JSON.parse(stored);
-                    if (Date.now() - parsed.timestamp < CONFIG.CACHE_DURATION) {
-                        return parsed.data;
-                    }
-                } catch (e) {
-                    console.error('Failed to parse cache', e);
-                }
-            }
-            return null;
-        }
-
-        saveState(data) {
-            const cache = { timestamp: Date.now(), data: data };
-            localStorage.setItem(CONFIG.CACHE_KEY, JSON.stringify(cache));
-            this.state = data;
-        }
-
-        async fetchAllData(forceRefresh = false) {
-            if (!forceRefresh && this.state) {
-                log('Using cached data');
-                return this.state;
-            }
-
-            log('Fetching fresh data...');
-
-            // Helper to catch context
-            const wrap = async (p, name) => {
-                try {
-                    return await p;
-                } catch (e) {
-                    throw new Error(`${name} failed: ${e.message}`);
-                }
-            };
-
+        async fetchEmpireData() {
             try {
-                // 1. Fetch Empire View (Mines, Planet IDs, Building Levels)
-                const empireData = await wrap(this.fetchEmpire(), 'Empire View');
+                this.empireData = {};
+                // OGLight loops i=0 (Planets) and i=1 (Moons)
+                const types = [0, 1];
 
-                // 2. Fetch LF Bonuses (Current multipliers)
-                const lfBonuses = await wrap(this.fetchLFBonuses(), 'LF Bonuses');
+                const promises = types.map(type =>
+                    fetch(`/game/index.php?page=ajax&component=empire&ajax=1&planetType=${type}&asJson=1`, {
+                        headers: { "X-Requested-With": "XMLHttpRequest" }
+                    })
+                        .then(res => res.json())
+                        .then(json => {
+                            if (json.mergedArray) {
+                                // OGLight logic: this.ogl._empire.update(JSON.parse(result.mergedArray), i)
+                                // mergedArray parses to { planets: [...] }
+                                const parsed = JSON.parse(json.mergedArray);
 
-                // 3. Fetch Resource Settings (Plasma, Officer, Geologist)
-                const resourceSettings = await wrap(this.fetchResourceSettings(), 'Settings');
+                                if (parsed && parsed.planets) {
+                                    parsed.planets.forEach(p => {
+                                        if (p && p.id) {
+                                            this.empireData[p.id] = p;
+                                        }
+                                    });
+                                }
+                            }
+                        })
+                        .catch(err => console.error(`ROI Advisor: Error fetching type ${type}`, err))
+                );
 
-                // Combine data
-                const fullData = {
-                    empire: empireData,
-                    bonuses: lfBonuses,
-                    settings: resourceSettings,
-                    timestamp: Date.now()
-                };
-
-                this.saveState(fullData);
-                return fullData;
+                await Promise.all(promises);
+                console.log('ROI Advisor: Full Empire Data Fetched', this.empireData);
+                return this.empireData;
             } catch (error) {
-                console.error('detailed_error', error);
-                alert(`ROI Advisor Error: ${error.message}\n(See Console for full dump)`);
-                throw error;
-            }
-        }
-
-        async fetchEmpire() {
-            // Primary strategy: OGame Ajax Empire View
-            // This often fails if "Commander" is not active or server blocks it.
-            const url = '/game/index.php?page=ajax&component=empire&ajax=1&asJson=1';
-
-            try {
-                const response = await fetch(url);
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                const text = await response.text();
-
-                // If text starts with "An error", the server rejected it.
-                if (text.includes('An error has occured') || text.trim().startsWith('<')) {
-                    throw new Error('API request rejected or returned HTML');
-                }
-
-                return JSON.parse(text);
-            } catch (e) {
-                console.warn('[ROI Advisor] Empire API failed, switching to DOM Scraper Fallback:', e.message);
-                return this.fetchEmpireFallback();
-            }
-        }
-
-        /**
-         * Fallback: Parse data from the current page's resources or building list.
-         */
-        async fetchEmpireFallback() {
-            log('Running Fallback Parser...');
-
-            // 1. Get Current Planet Name/ID
-            const planetIdMatch = document.querySelector('meta[name="ogame-planet-id"]');
-            const planetNameMatch = document.querySelector('meta[name="ogame-planet-name"]');
-
-            const pId = planetIdMatch ? planetIdMatch.content : 'current';
-            const pName = planetNameMatch ? planetNameMatch.content : 'Current Planet';
-
-            // Defines IDs
-            const TECH_IDS = { metal: 1, crystal: 2, deuterium: 3 };
-
-            // Helper to extract level from a DOM container (document or parsed fragment)
-            const extractLevelFromDom = (root, techId) => {
-                // Selector strategy:
-                // .technology[data-technology="1"] .level[data-value]
-                // or .technology[data-technology="1"] .amount[data-value]
-
-                const node = root.querySelector(`[data-technology="${techId}"]`);
-                if (!node) return null;
-
-                // 1. Check .level (standard)
-                let span = node.querySelector('.level');
-                if (span) return parseInt(span.getAttribute('data-value') || span.innerText) || 0;
-
-                // 2. Check .amount (sometimes used)
-                span = node.querySelector('.amount');
-                if (span) return parseInt(span.getAttribute('data-value') || span.innerText) || 0;
-
-                // 3. Check data-value on the node itself (sometimes in mobile view)
-                if (node.hasAttribute('data-value')) return parseInt(node.getAttribute('data-value'));
-
+                console.error('ROI Advisor: Critical Error fetching Empire Data', error);
                 return null;
-            };
-
-            const levels = { metal: 0, crystal: 0, deuterium: 0 };
-            let foundOnPage = false;
-
-            // STRATEGY A: Scan Current Page (Fastest)
-            // If user is on 'Resources' page (component=supplies), the nodes are right here.
-            log('Scanning current page DOM...');
-            if (extractLevelFromDom(document, 1) !== null) {
-                levels.metal = extractLevelFromDom(document, 1);
-                levels.crystal = extractLevelFromDom(document, 2);
-                levels.deuterium = extractLevelFromDom(document, 3);
-                foundOnPage = true;
-                log('Found levels on current page:', levels);
-            }
-
-            // STRATEGY B: Fetch 'supplies' component if not found
-            if (!foundOnPage) {
-                log('Levels not on current page. Fetching supplies...');
-                const suppliesUrl = '/game/index.php?page=ingame&component=supplies&ajax=1';
-                try {
-                    const resp = await fetch(suppliesUrl);
-                    const raw = await resp.text();
-
-                    // The API likely returns JSON with HTML in 'content'.
-                    // Try parsing as JSON first.
-                    let htmlContent = raw;
-                    try {
-                        const json = JSON.parse(raw);
-                        if (json.content) htmlContent = json.content;
-                    } catch (e) { }
-
-                    // Parse the HTML string
-                    const parser = new DOMParser();
-                    const doc = parser.parseFromString(htmlContent, 'text/html');
-
-                    levels.metal = extractLevelFromDom(doc, 1) || 0;
-                    levels.crystal = extractLevelFromDom(doc, 2) || 0;
-                    levels.deuterium = extractLevelFromDom(doc, 3) || 0;
-
-                    log('Parsed levels from fetch:', levels);
-
-                } catch (e) {
-                    console.error('Fallback Fetch Error:', e);
-                }
-            }
-
-            // 3. Lifeform Levels
-            // We need to fetch LF levels too.
-            const lfLevels = await this.fetchLifeformLevelsFallback(pId);
-
-            return {
-                planets: [{
-                    id: pId,
-                    name: pName,
-                    buildings: { ...levels, ...lfLevels }
-                }]
-            };
-        }
-
-        async fetchLifeformLevelsFallback(planetId) {
-            try {
-                // STRATEGY A: Check current page (if user is on Lifeform Buildings)
-                // IDs: Magma Forge(11202), Crystal Refinery(11203), Deut Synth(11204)
-
-                const found = {};
-
-                // Helper to find Tech in a root
-                const scanRoot = (root) => {
-                    // Rock'tal IDs: 
-                    const ID_MAP = {
-                        'Magma Forge': 11202,
-                        'Crystal Refinery': 11203,
-                        'Deuterium Synthesizer': 11204
-                    };
-
-                    for (const [name, id] of Object.entries(ID_MAP)) {
-                        const node = root.querySelector(`[data-technology="${id}"]`);
-                        if (node) {
-                            const lvlSpan = node.querySelector('.level');
-                            const lvl = parseInt(lvlSpan?.getAttribute('data-value') || lvlSpan?.innerText || 0);
-                            found[name] = lvl;
-                        }
-                    }
-                };
-
-                // Scan Document
-                scanRoot(document);
-
-                // STRATEGY B: Fetch if not found
-                if (Object.keys(found).length === 0) {
-                    const lfUrl = '/game/index.php?page=ingame&component=lifeformbuildings&ajax=1';
-                    const resp = await fetch(lfUrl);
-                    const raw = await resp.text();
-                    let html = raw;
-                    try {
-                        const json = JSON.parse(raw);
-                        if (json.content) html = json.content;
-                    } catch (e) { }
-
-                    const parser = new DOMParser();
-                    const doc = parser.parseFromString(html, 'text/html');
-                    scanRoot(doc);
-                }
-
-                log('Parsed LF Levels:', found);
-                return found;
-            } catch (e) {
-                console.warn('LF Fallback failed', e);
-                return {};
             }
         }
 
         async fetchLFBonuses() {
-            const url = '/game/index.php?page=ingame&component=lfbonuses&ajax=1';
-            const response = await fetch(url);
-            const text = await response.text();
             try {
-                return JSON.parse(text);
-            } catch (e) {
-                return { raw: text };
-            }
-        }
+                const response = await fetch('/game/index.php?page=ajax&component=lfbonuses');
+                const htmlText = await response.text();
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(htmlText, 'text/html');
 
-        async fetchResourceSettings() {
-            const url = '/game/index.php?page=ingame&component=resourceSettings&ajax=1';
-            const response = await fetch(url);
-            const text = await response.text();
-            return {
-                plasmaTech: 0,
-                geologist: false
-            };
-        }
-    }
+                // Logic ported from OGLight to extract bonuses
+                // Selects all subcategories or items that have data-toggable attributes
+                const items = doc.querySelectorAll("bonus-item-content-holder > [data-toggable]");
+                this.lfBonuses = {};
 
-    // ==========================================
-    // MODULE: CALCULATOR
-    // ==========================================
-    class Calculator {
-        constructor() {
-            this.tradeRate = { metal: 1, crystal: 1.5, deuterium: 3 };
-        }
+                items.forEach(item => {
+                    // Clean ID: "subcategory11101" -> "11101"
+                    const dirtyId = item.getAttribute("data-toggable");
+                    const id = dirtyId.replace(/subcategory|Ships|Defenses|CostAndTime/g, "");
 
-        generateRecommendations(data) {
-            const recommendations = [];
-            const empire = data.empire;
-            if (!empire || !empire.planets) {
-                log('Invalid empire data structure', empire);
-                return [];
-            }
+                    // Extract numeric values from bonus-item elements
+                    const bonuses = [];
+                    const bonusItems = item.querySelectorAll("bonus-item"); // These usually hold the text like "+5%"
 
-            empire.planets.forEach(planet => {
-                this.addMineROI(planet, recommendations, data);
-                this.addLfBuildingROI(planet, recommendations, data);
-            });
-
-            this.addPlasmaTechROI(empire.planets, recommendations, data);
-            recommendations.sort((a, b) => a.paybackHours - b.paybackHours);
-            return recommendations.slice(0, 20);
-        }
-
-        addMineROI(planet, list, data) {
-            ['metal', 'crystal', 'deuterium'].forEach(res => {
-                const currentLevel = planet.buildings ? (planet.buildings[res] || 0) : 0;
-                const nextLevel = currentLevel + 1;
-                const cost = this.getMineCost(res, nextLevel);
-                const prodCurrent = this.getMineProduction(res, currentLevel, planet, data);
-                const prodNext = this.getMineProduction(res, nextLevel, planet, data);
-                const deltaProd = prodNext - prodCurrent;
-                const costMSE = this.toMSE(cost);
-                const prodMSE = deltaProd * this.tradeRate[res];
-
-                if (prodMSE > 0) {
-                    list.push({
-                        planetName: planet.name,
-                        name: `${res.charAt(0).toUpperCase() + res.slice(1)} Mine Lvl ${nextLevel}`,
-                        type: 'Mine',
-                        paybackHours: costMSE / prodMSE
-                    });
-                }
-            });
-        }
-
-        addPlasmaTechROI(planets, list, data) {
-            const currentPlasma = data.settings.plasmaTech || 0;
-            const nextPlasma = currentPlasma + 1;
-            const cost = {
-                metal: 2000 * Math.pow(2, currentPlasma),
-                crystal: 4000 * Math.pow(2, currentPlasma),
-                deuterium: 1000 * Math.pow(2, currentPlasma)
-            };
-            let totalDeltaMSE = 0;
-            planets.forEach(planet => {
-                const mLevel = planet.buildings ? (planet.buildings.metal || 0) : 0;
-                const cLevel = planet.buildings ? (planet.buildings.crystal || 0) : 0;
-                const mBase = 30 * mLevel * Math.pow(1.1, mLevel);
-                const cBase = 20 * cLevel * Math.pow(1.1, cLevel);
-                const deltaM = mBase * 0.01;
-                const deltaC = cBase * 0.0066;
-                totalDeltaMSE += (deltaM * this.tradeRate.metal) + (deltaC * this.tradeRate.crystal);
-            });
-            const costMSE = this.toMSE(cost);
-            if (totalDeltaMSE > 0) {
-                list.push({
-                    planetName: 'Empire',
-                    name: `Plasma Technology Lvl ${nextPlasma}`,
-                    type: 'Tech',
-                    paybackHours: costMSE / totalDeltaMSE
-                });
-            }
-        }
-
-        addLfBuildingROI(planet, list, data) {
-            for (const [bName, bData] of Object.entries(GAME_DATA.lifeform_buildings)) {
-                let currentLevel = 0;
-                if (planet.buildings && planet.buildings[bName]) {
-                    currentLevel = planet.buildings[bName];
-                }
-                const nextLevel = currentLevel + 1;
-                const cost = this.getLfCost(bData.baseCost, bData.costFactor, nextLevel);
-                const costMSE = this.toMSE(cost);
-                let valueMSE = 0;
-
-                if (bData.bonusType) {
-                    let baseProd = 0;
-                    if (bData.bonusType === 'metal') {
-                        const lvl = planet.buildings ? (planet.buildings.metal || 0) : 0;
-                        baseProd = 30 * lvl * Math.pow(1.1, lvl);
-                    } else if (bData.bonusType === 'crystal') {
-                        const lvl = planet.buildings ? (planet.buildings.crystal || 0) : 0;
-                        baseProd = 20 * lvl * Math.pow(1.1, lvl);
+                    if (bonusItems.length > 0) {
+                        bonusItems.forEach(bonus => {
+                            // Simple regex to find numbers (including negatives and decimals)
+                            const text = bonus.innerText;
+                            const match = text.match(/[0-9|-]+([.,][0-9]+)?/g);
+                            if (match) {
+                                const val = parseFloat(match[0].replace(',', '.'));
+                                bonuses.push(val);
+                            } else {
+                                bonuses.push(0);
+                            }
+                        });
+                    } else {
+                        // Fallback for items appearing directly without sub-items
+                        const text = item.innerText;
+                        const match = text.match(/[0-9|-]+([.,][0-9]+)?/g);
+                        if (match) {
+                            const val = parseFloat(match[0].replace(',', '.'));
+                            this.lfBonuses[id] = { bonus: val };
+                            return; // Skip array assignment
+                        }
                     }
-                    const productionGain = baseProd * bData.bonusPerLevel;
-                    valueMSE = productionGain * (this.tradeRate[bData.bonusType] || 1);
-                } else if (bData.productionType) {
-                    const temp = planet.temperature ? planet.temperature.max : 20;
-                    const tempFactor = (1.36 - 0.004 * temp);
-                    const prodCurrent = 10 * currentLevel * Math.pow(1.101, currentLevel) * tempFactor;
-                    const prodNext = 10 * nextLevel * Math.pow(1.101, nextLevel) * tempFactor;
-                    const productionGain = prodNext - prodCurrent;
-                    valueMSE = productionGain * (this.tradeRate[bData.productionType] || 1);
-                }
 
-                if (valueMSE > 0) {
-                    list.push({
-                        planetName: planet.name,
-                        name: `${bName} Lvl ${nextLevel}`,
-                        type: 'Lifeform',
-                        paybackHours: costMSE / valueMSE
-                    });
-                }
+                    // Store based on ID type (simulating OGLight structure roughly)
+                    // We really only care about Techs/Buildings here for ROI
+                    this.lfBonuses[id] = { raw: bonuses };
+                });
+
+                console.log('ROI Advisor: LF Bonuses Fetched', this.lfBonuses);
+                return this.lfBonuses;
+            } catch (error) {
+                console.error('ROI Advisor: Error fetching LF Bonuses', error);
+                return null;
             }
         }
 
-        getMineCost(resource, level) {
-            const costs = { metal: 0, crystal: 0, deuterium: 0 };
-            const exponent = resource === 'metal' || resource === 'crystal' ? 1.5 : 1.6;
-            let baseM = 0; let baseC = 0;
-            if (resource === 'metal') { baseM = 60; baseC = 15; }
-            else if (resource === 'crystal') { baseM = 48; baseC = 24; }
-            else if (resource === 'deuterium') { baseM = 225; baseC = 75; }
-            costs.metal = Math.floor(baseM * Math.pow(exponent, level - 1));
-            costs.crystal = Math.floor(baseC * Math.pow(exponent, level - 1));
-            return costs;
-        }
-
-        getLfCost(baseCost, factor, level) {
-            const costs = { metal: 0, crystal: 0, deuterium: 0 };
-            const mult = Math.pow(factor, level - 1);
-            costs.metal = Math.floor((baseCost.metal || 0) * mult);
-            costs.crystal = Math.floor((baseCost.crystal || 0) * mult);
-            costs.deuterium = Math.floor((baseCost.deuterium || 0) * mult);
-            return costs;
-        }
-
-        getMineProduction(resource, level, planet, data) {
-            if (level === 0) return 0;
-            let base = 0;
-            if (resource === 'metal') base = 30 * level * Math.pow(1.1, level);
-            else if (resource === 'crystal') base = 20 * level * Math.pow(1.1, level);
-            else if (resource === 'deuterium') {
-                const temp = planet.temperature ? planet.temperature.max : 20;
-                base = 10 * level * Math.pow(1.1, level) * (1.44 - 0.004 * temp);
-            }
-            const serverSpeed = 1;
-            let plasmaBonus = 0;
-            const plasmaLvl = data.settings.plasmaTech || 0;
-            if (resource === 'metal') plasmaBonus = 0.01 * plasmaLvl;
-            else if (resource === 'crystal') plasmaBonus = 0.0066 * plasmaLvl;
-            const totalMult = serverSpeed * (1 + plasmaBonus);
-            return base * totalMult;
-        }
-
-        toMSE(costObject) {
-            return (costObject.metal * this.tradeRate.metal) +
-                (costObject.crystal * this.tradeRate.crystal) +
-                (costObject.deuterium * this.tradeRate.deuterium);
+        async fetchAll() {
+            console.log('ROI Advisor: Fetching all data...');
+            await Promise.all([this.fetchEmpireData(), this.fetchLFBonuses()]);
+            return {
+                empire: this.empireData,
+                bonuses: this.lfBonuses
+            };
         }
     }
 
-    // ==========================================
-    // MODULE: UI MANAGER
-    // ==========================================
+    // --- UI Manager ---
     class UIManager {
-        constructor(onClickHandlers) {
-            this.onClickHandlers = onClickHandlers;
-            this.init();
+        constructor(dataFetcher, calculator) {
+            this.dataFetcher = dataFetcher;
+            this.calculator = calculator;
+            this.modalId = 'roi-advisor-modal';
+            this.isOpen = false;
+            this.contentContainer = null; // To store the content div for re-rendering
+            this.activeTabIndex = 0; // To keep track of the currently active tab
         }
 
-        init() {
-            this.injectButton();
-            this.createModal();
-        }
+        createButton() {
+            const menu = document.querySelector('#menuTable');
+            if (!menu) return;
 
-        injectButton() {
-            log('Injecting Button...');
-            const tryInject = () => {
-                const menu = document.querySelector('#menuTable') || document.querySelector('#menuButtons');
-                if (menu) {
-                    if (document.getElementById('roi-advisor-btn-li')) return true;
+            const buttonContainer = document.createElement('li');
+            buttonContainer.className = 'menubutton_table';
 
-                    const li = document.createElement('li');
-                    li.id = 'roi-advisor-btn-li';
-                    li.className = 'menubutton_table';
-
-                    const a = document.createElement('a');
-                    a.className = 'menubutton';
-                    a.href = 'javascript:void(0);';
-                    a.style.display = 'block';
-
-                    const span = document.createElement('span');
-                    span.className = 'textlabel';
-                    span.innerText = 'ROI Advisor';
-                    span.style.color = '#a4c2f4'; // Light Blue
-
-                    a.appendChild(span);
-                    a.addEventListener('click', this.onClickHandlers.onOpen);
-                    li.appendChild(a);
-
-                    menu.appendChild(li); // Appends to bottom of sidebar
-                    log('Button Injected Successfully into', menu.id);
-                    return true;
-                }
-                return false;
+            const link = document.createElement('a');
+            link.className = 'menubutton';
+            link.href = '#';
+            link.innerHTML = '<span class="textlabel">ROI Advisor</span>';
+            link.onclick = (e) => {
+                e.preventDefault();
+                this.toggleModal();
             };
 
-            // Attempt loop
-            if (!tryInject()) {
-                const interval = setInterval(() => {
-                    if (tryInject()) clearInterval(interval);
-                }, 500);
+            buttonContainer.appendChild(link);
+            menu.appendChild(buttonContainer);
+        }
+
+        async toggleModal() {
+            if (this.isOpen) {
+                this.closeModal();
+            } else {
+                await this.openModal();
             }
         }
 
-        createModal() {
-            const modalId = 'roi-advisor-modal';
-            if (document.getElementById(modalId)) return;
+        async openModal() {
+            // Fetch data before showing
+            await this.dataFetcher.fetchAll();
 
             const modal = document.createElement('div');
-            modal.id = modalId;
-            modal.style.cssText = `
-                position: fixed;
-                top: 50%; left: 50%;
-                transform: translate(-50%, -50%);
-                width: 600px; max-height: 80vh;
-                background: #161a23;
-                border: 1px solid #3d4a63;
-                z-index: 9999;
-                display: none;
-                flex-direction: column;
-                color: #fff;
-                font-family: Arial, sans-serif;
-                box-shadow: 0 0 20px rgba(0,0,0,0.8);
-            `;
+            modal.id = this.modalId;
+            Object.assign(modal.style, {
+                position: 'fixed',
+                top: '5%',
+                left: '50%',
+                transform: 'translateX(-50%)',
+                width: '90%',
+                height: '80%',
+                backgroundColor: '#161e2b',
+                border: '2px solid #555',
+                borderRadius: '10px',
+                zIndex: '9999',
+                color: '#fff',
+                display: 'flex',
+                flexDirection: 'column',
+                boxShadow: '0 0 20px rgba(0,0,0,0.8)',
+                fontSize: '12px'
+            });
 
+            // Header
             const header = document.createElement('div');
-            header.style.cssText = `
-                padding: 10px;
-                background: #212938;
-                border-bottom: 1px solid #3d4a63;
-                display: flex; justify-content: space-between; align-items: center;
-                cursor: move;
-            `;
-            header.innerHTML = '<strong>ROI Advisor</strong>';
+            Object.assign(header.style, {
+                padding: '10px',
+                borderBottom: '1px solid #333',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center'
+            });
+
+            const title = document.createElement('h3');
+            title.innerText = 'ROI Advisor (v2.1)';
+            header.appendChild(title);
+
+            const controls = document.createElement('div');
+
+            // Sync Button
+            const syncBtn = document.createElement('button');
+            syncBtn.innerText = '↻ Sync Data';
+            Object.assign(syncBtn.style, {
+                background: '#2d3748',
+                border: '1px solid #4a5568',
+                color: 'white',
+                padding: '5px 10px',
+                marginRight: '15px',
+                borderRadius: '4px',
+                cursor: 'pointer'
+            });
+            syncBtn.onclick = async () => {
+                syncBtn.innerText = 'Syncing...';
+                await this.dataFetcher.fetchAll();
+                this.renderTabContent(this.contentContainer, this.activeTabIndex || 0);
+                syncBtn.innerText = '↻ Sync Data';
+            };
+            controls.appendChild(syncBtn);
 
             const closeBtn = document.createElement('button');
             closeBtn.innerText = 'X';
-            closeBtn.style.cssText = 'background:none; border:none; color:#faa; cursor:pointer; font-weight:bold;';
-            closeBtn.onclick = () => { modal.style.display = 'none'; };
-            header.appendChild(closeBtn);
+            Object.assign(closeBtn.style, {
+                background: 'transparent',
+                border: 'none',
+                color: 'white',
+                fontSize: '16px',
+                cursor: 'pointer'
+            });
+            closeBtn.onclick = () => this.closeModal();
+            controls.appendChild(closeBtn);
 
-            const refreshBtn = document.createElement('button');
-            refreshBtn.innerText = 'Refresh';
-            refreshBtn.style.cssText = `
-                margin-left: auto; margin-right: 10px;
-                background: #334455; color: white; border: 1px solid #556677;
-                cursor: pointer; padding: 2px 8px; border-radius: 3px;
-            `;
-            refreshBtn.onclick = this.onClickHandlers.onRefresh;
-            header.insertBefore(refreshBtn, closeBtn);
-
-            const content = document.createElement('div');
-            content.id = 'roi-advisor-content';
-            content.style.cssText = 'padding: 10px; overflow-y: auto;';
-
+            header.appendChild(controls);
             modal.appendChild(header);
-            modal.appendChild(content);
+
+            // Tabs
+            const tabsContainer = document.createElement('div');
+            Object.assign(tabsContainer.style, {
+                display: 'flex',
+                borderBottom: '1px solid #333'
+            });
+
+            const tabs = ['Mines', 'Research', 'LF Buildings', 'LF Techs'];
+            const contentContainer = document.createElement('div');
+            Object.assign(contentContainer.style, {
+                flex: '1',
+                padding: '15px',
+                overflowY: 'auto'
+            });
+            this.contentContainer = contentContainer;
+
+            tabs.forEach((tabName, index) => {
+                const tab = document.createElement('div');
+                tab.innerText = tabName;
+                Object.assign(tab.style, {
+                    padding: '10px 20px',
+                    cursor: 'pointer',
+                    backgroundColor: index === 0 ? '#2d3748' : 'transparent'
+                });
+                tab.onclick = () => {
+                    Array.from(tabsContainer.children).forEach(t => t.style.backgroundColor = 'transparent');
+                    tab.style.backgroundColor = '#2d3748';
+                    this.activeTabIndex = index;
+                    this.renderTabContent(contentContainer, index);
+                };
+                tabsContainer.appendChild(tab);
+            });
+
+            modal.appendChild(tabsContainer);
+            modal.appendChild(contentContainer);
             document.body.appendChild(modal);
+            this.isOpen = true;
+            this.activeTabIndex = 0;
+            this.renderTabContent(contentContainer, 0);
         }
 
-        showModal() {
-            const modal = document.getElementById('roi-advisor-modal');
-            if (modal) {
-                modal.style.display = 'flex';
-                this.renderLoading();
+        closeModal() {
+            const modal = document.getElementById(this.modalId);
+            if (modal) modal.remove();
+            this.isOpen = false;
+        }
+
+        renderTabContent(container, tabIndex) {
+            container.innerHTML = '';
+            switch (tabIndex) {
+                case 0: this.renderMinesTab(container); break;
+                case 1: this.renderResearchTab(container); break;
+                case 2: this.renderLFBuildingsTab(container); break;
+                case 3: this.renderLFTechsTab(container); break;
             }
         }
 
-        renderLoading() {
-            const content = document.getElementById('roi-advisor-content');
-            if (content) content.innerHTML = '<p style="text-align:center;">Calculating...</p>';
-        }
-
-        renderResults(results) {
-            const content = document.getElementById('roi-advisor-content');
-            if (!content) return;
-            if (results.length === 0) {
-                content.innerHTML = '<p>No profitable upgrades found.</p>';
+        renderMinesTab(container) {
+            const data = this.dataFetcher.empireData;
+            if (!data) {
+                container.innerHTML = 'No Data Available';
                 return;
             }
-            let html = '<table style="width:100%; border-collapse: collapse; font-size: 12px;">';
-            html += '<tr style="background:#28303f; text-align:left;"><th>Planet</th><th>Upgrade</th><th>Payback</th></tr>';
-            results.forEach((item, index) => {
-                const bg = index % 2 === 0 ? 'transparent' : '#1e242f';
-                const days = Math.floor(item.paybackHours / 24);
-                const hrs = Math.floor(item.paybackHours % 24);
-                html += `<tr style="background:${bg}; border-bottom: 1px solid #333;">
-                        <td style="padding:5px;">${item.planetName}</td>
-                        <td style="padding:5px; color:#d29d00;">${item.name}</td>
-                        <td style="padding:5px;">${days}d ${hrs}h</td>
-                    </tr>`;
+
+            // Estimate Plasma Level from first planet
+            // TODO: Ensure 122 is correct ID or scrape it properly
+            const firstPlanet = Object.values(data)[0];
+            const plasmaLevel = firstPlanet ? (parseInt(firstPlanet['122']) || 0) : 0;
+
+            const table = document.createElement('table');
+            table.style.width = '100%';
+            table.style.borderCollapse = 'collapse';
+
+            const thead = document.createElement('thead');
+            thead.innerHTML = `
+                <tr>
+                    <th style="border: 1px solid #444; padding: 5px;">Planet</th>
+                    <th style="border: 1px solid #444; padding: 5px; color: #99cfff;">Metal</th>
+                    <th style="border: 1px solid #444; padding: 5px; color: #a0ff99;">Crystal</th>
+                    <th style="border: 1px solid #444; padding: 5px; color: #ff9999;">Deuterium</th>
+                </tr>
+            `;
+            table.appendChild(thead);
+
+            const tbody = document.createElement('tbody');
+            Object.values(data).forEach(planet => {
+                const m = parseInt(planet['1']) || 0;
+                const c = parseInt(planet['2']) || 0;
+                const d = parseInt(planet['3']) || 0;
+
+                // Calc ROI
+                const roiM = this.calculator.calcROI(m, 1, planet, plasmaLevel);
+                const roiC = this.calculator.calcROI(c, 2, planet, plasmaLevel);
+                const roiD = this.calculator.calcROI(d, 3, planet, plasmaLevel);
+
+                const row = document.createElement('tr');
+                // Display: Level (ROI Days)
+                row.innerHTML = `
+                    <td style="border: 1px solid #444; padding: 5px;">${planet.name} [${planet.coordinates}]</td>
+                    <td style="border: 1px solid #444; padding: 5px;">
+                        <div style="font-weight:bold;">${m}</div>
+                        <div style="font-size: 0.9em; color: #888;">${roiM.roiDays.toFixed(1)}d</div>
+                    </td>
+                    <td style="border: 1px solid #444; padding: 5px;">
+                        <div style="font-weight:bold;">${c}</div>
+                        <div style="font-size: 0.9em; color: #888;">${roiC.roiDays.toFixed(1)}d</div>
+                    </td>
+                    <td style="border: 1px solid #444; padding: 5px;">
+                        <div style="font-weight:bold;">${d}</div>
+                        <div style="font-size: 0.9em; color: #888;">${roiD.roiDays.toFixed(1)}d</div>
+                    </td>
+                `;
+                tbody.appendChild(row);
             });
-            html += '</table>';
-            content.innerHTML = html;
+            table.appendChild(tbody);
+            container.appendChild(table);
+        }
+
+        renderResearchTab(container) {
+            const data = this.dataFetcher.empireData;
+            const firstPlanet = Object.values(data || {})[0];
+            const plasmaLevel = firstPlanet ? (firstPlanet['122'] || 0) : 'Unknown';
+            container.innerHTML = `
+                <h3>Research Levels</h3>
+                <div style="margin-top: 20px;">
+                    <strong>Plasma Technology:</strong> 
+                    <span style="font-size: 1.5em; color: #48bb78; margin-left: 10px;">${plasmaLevel}</span>
+                </div>
+            `;
+        }
+
+        renderLFBuildingsTab(container) {
+            const data = this.dataFetcher.empireData;
+            if (!data) return;
+            const table = document.createElement('table');
+            table.style.width = '100%';
+            table.style.borderCollapse = 'collapse';
+            table.innerHTML = `
+                <thead>
+                    <tr>
+                        <th style="border: 1px solid #444; padding: 5px;">Planet</th>
+                        <th style="border: 1px solid #444; padding: 5px; color: #d4a373;">Magma</th>
+                        <th style="border: 1px solid #444; padding: 5px; color: #d4a373;">Refinery</th>
+                        <th style="border: 1px solid #444; padding: 5px; color: #d4a373;">DeutSyn</th>
+                        <th style="border: 1px solid #444; padding: 5px; color: #a3b1d4;">Smelt</th>
+                        <th style="border: 1px solid #444; padding: 5px; color: #e5e5e5;">PerfSyn</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${Object.values(data).map(p => `
+                        <tr>
+                            <td style="border: 1px solid #444; padding: 5px;">${p.name}</td>
+                            <td style="border: 1px solid #444; padding: 5px;">${p['12103'] || 0}</td>
+                            <td style="border: 1px solid #444; padding: 5px;">${p['12104'] || 0}</td>
+                            <td style="border: 1px solid #444; padding: 5px;">${p['12105'] || 0}</td>
+                            <td style="border: 1px solid #444; padding: 5px;">${p['11103'] || 0}</td>
+                            <td style="border: 1px solid #444; padding: 5px;">${p['13103'] || 0}</td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            `;
+            container.appendChild(table);
+        }
+
+        renderLFTechsTab(container) {
+            const data = this.dataFetcher.empireData;
+            if (!data) return;
+            const table = document.createElement('table');
+            table.style.width = '100%';
+            table.style.borderCollapse = 'collapse';
+
+            let header = '<tr><th style="border: 1px solid #444; padding: 5px;">Planet</th>';
+            for (let i = 1; i <= 18; i++) header += `<th style="border: 1px solid #444; padding:2px; text-align:center; font-size:10px;">S${i}</th>`;
+            header += '</tr>';
+
+            const rows = Object.values(data).map(p => {
+                let r = `<tr><td style="border: 1px solid #444; padding: 5px;">${p.name}</td>`;
+                for (let i = 1; i <= 18; i++) {
+                    const h = 11200 + i, ro = 12200 + i, m = 13200 + i, k = 14200 + i;
+                    const val = p[h] || p[ro] || p[m] || p[k] || 0;
+                    let color = '#fff';
+                    if (p[h]) color = '#a3b1d4';
+                    else if (p[ro]) color = '#d4a373';
+                    else if (p[m]) color = '#e5e5e5';
+                    else if (p[k]) color = '#a2845e';
+                    r += `<td style="border: 1px solid #444; padding: 5px; text-align:center; color:${color};">${val}</td>`;
+                }
+                return r + '</tr>';
+            }).join('');
+
+            table.innerHTML = `<thead>${header}</thead><tbody>${rows}</tbody>`;
+            container.appendChild(table);
+
+            const legend = document.createElement('div');
+            legend.style.marginTop = '10px';
+            legend.innerHTML = 'Legend: <span style="color:#a3b1d4">Human</span>, <span style="color:#d4a373">Rocktal</span>, <span style="color:#e5e5e5">Mecha</span>, <span style="color:#a2845e">Kaelesh</span>';
+            container.appendChild(legend);
         }
     }
 
+    // --- Calculator ---
+    class Calculator {
+        constructor() {
+            this.serverSpeed = 1; // Default, should try to scrape or user input
+            this.mse = { metal: 1, crystal: 1.5, deut: 3 }; // Standard MSE, customizable later
+        }
+
+        // --- Production Formulas ---
+        getMetalProd(level, plasmaLevel, geolog, items, classBonus, lfBonus) {
+            // Base * Level * 1.1^Level
+            // Plasma: 1% per level (0.01 * level * baseProd) or (1 + 0.01*level) * baseProd? 
+            // Standard: BaseProd * (1 + Plasma + Geo + Items + Class + LF)
+            const base = 30 * level * Math.pow(1.1, level);
+            const plasma = level > 0 ? (plasmaLevel * 0.01) : 0; // 1% per plasma level for Metal
+            return base * (1 + plasma + (lfBonus || 0)) * this.serverSpeed;
+        }
+
+        getCrystalProd(level, plasmaLevel, lfBonus) {
+            const base = 20 * level * Math.pow(1.1, level);
+            const plasma = level > 0 ? (plasmaLevel * 0.0066) : 0; // 0.66% per plasma level
+            return base * (1 + plasma + (lfBonus || 0)) * this.serverSpeed;
+        }
+
+        getDeutProd(level, avgTemp, plasmaLevel, lfBonus) {
+            // 10 * level * 1.1^level * (1.44 - 0.004 * avgTemp)
+            const base = 10 * level * Math.pow(1.1, level) * (1.44 - 0.004 * avgTemp);
+            // Plasma: 0.33% per level? (Actually OGame added Plasma for Deut recently? Need to verify. Assume 0 or user config). 
+            // EDIT: Plasma does boost Deut now in many universes. 0.33%.
+            const plasma = level > 0 ? (plasmaLevel * 0.0033) : 0;
+            return base * (1 + plasma + (lfBonus || 0)) * this.serverSpeed;
+        }
+
+        // --- Cost Formulas ---
+        getMetalCost(level) {
+            return {
+                metal: 60 * Math.pow(1.5, level - 1),
+                crystal: 15 * Math.pow(1.5, level - 1)
+            };
+        }
+
+        getCrystalCost(level) {
+            return {
+                metal: 48 * Math.pow(1.6, level - 1),
+                crystal: 24 * Math.pow(1.6, level - 1)
+            };
+        }
+
+        getDeutCost(level) {
+            return {
+                metal: 225 * Math.pow(1.5, level - 1),
+                crystal: 75 * Math.pow(1.5, level - 1)
+            };
+        }
+
+        getMSE(cost) {
+            return (cost.metal || 0) * this.mse.metal + (cost.crystal || 0) * this.mse.crystal + (cost.deut || 0) * this.mse.deut; // Deut cost is rare for mines usually
+        }
+
+        // --- ROI Calculation ---
+        calcROI(currentLevel, type, planetData, plasmaLevel, lfData) {
+            // Type: 1=Metal, 2=Crystal, 3=Deut
+            const nextLevel = currentLevel + 1;
+            let cost, prodDiff;
+
+            // TODO: Extract LF Bonus for this planet/resource
+            // For now assuming 0 LF bonus diff to simplify
+            const lfBonus = 0;
+
+            if (type === 1) {
+                cost = this.getMetalCost(nextLevel);
+                const currentProd = this.getMetalProd(currentLevel, plasmaLevel, 0, 0, 0, lfBonus);
+                const nextProd = this.getMetalProd(nextLevel, plasmaLevel, 0, 0, 0, lfBonus);
+                prodDiff = nextProd - currentProd; // Hourly production gain
+            } else if (type === 2) {
+                cost = this.getCrystalCost(nextLevel);
+                const currentProd = this.getCrystalProd(currentLevel, plasmaLevel, lfBonus);
+                const nextProd = this.getCrystalProd(nextLevel, plasmaLevel, lfBonus);
+                prodDiff = nextProd - currentProd;
+            } else if (type === 3) {
+                // Temp: 128 maps to temperature in Empire view? Need to check.
+                // "temperature": 40 (min) or similar.
+                // OGLight data key "temperature" or 128??
+                // The fetched json has "temperature" key.
+                let avgTemp = planetData.temperature || 20;
+                // Actually map has min/max usually, take avg?
+                // OGLight parsing: "temperature" === entry[0] ? ... = parseInt(...)
+
+                cost = this.getDeutCost(nextLevel);
+                const currentProd = this.getDeutProd(currentLevel, avgTemp, plasmaLevel, lfBonus);
+                const nextProd = this.getDeutProd(nextLevel, avgTemp, plasmaLevel, lfBonus);
+                prodDiff = nextProd - currentProd;
+            }
+
+            const totalCostMSE = this.getMSE(cost);
+            const prodMSE = prodDiff * (type === 1 ? this.mse.metal : type === 2 ? this.mse.crystal : this.mse.deut);
+
+            // ROI in Hours
+            const roiHours = totalCostMSE / prodMSE;
+            return {
+                cost: cost,
+                prodDiff: prodDiff,
+                roiHours: roiHours,
+                roiDays: roiHours / 24
+            };
+        }
+    }
+
+    // --- Main ---
     class ROIAdvisor {
         constructor() {
-            this.fetcher = new DataFetcher();
+            this.dataFetcher = new DataFetcher();
             this.calculator = new Calculator();
-            this.ui = new UIManager({
-                onOpen: () => this.handleOpen(),
-                onRefresh: () => this.handleRefresh()
-            });
+            this.uiManager = new UIManager(this.dataFetcher, this.calculator);
         }
-        async handleOpen() {
-            this.ui.showModal();
-            const data = await this.fetcher.fetchAllData(false);
-            const recommendations = this.calculator.generateRecommendations(data);
-            this.ui.renderResults(recommendations);
-        }
-        async handleRefresh() {
-            this.ui.renderLoading();
-            const data = await this.fetcher.fetchAllData(true);
-            const recommendations = this.calculator.generateRecommendations(data);
-            this.ui.renderResults(recommendations);
+
+        init() {
+            console.log('ROI Advisor: Initializing...');
+            this.uiManager.createButton();
         }
     }
 
-    new ROIAdvisor();
+    // Singleton Start
+    const app = new ROIAdvisor();
+    app.init();
 
 })();
