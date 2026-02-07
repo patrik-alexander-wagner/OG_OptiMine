@@ -1,3 +1,9 @@
-OGLight.user.js
-.DS_Store
-*.log
+# Ignore everything
+*
+
+# Except roi_advisor.user.js
+!roi_advisor.user.js
+
+# Keep README and .gitignore itself
+!README.md
+!.gitignore

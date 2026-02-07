@@ -20,6 +20,57 @@
         KAELESH: 4
     };
 
+    const TECH_NAMES = {
+        // Humans
+        11201: "Envoys", 11202: "Extractors", 11203: "Fusion", 11204: "Stealth", 11205: "Orbital", 11206: "AI",
+        11207: "H.Terra", 11208: "Enh.Prod", 11209: "LF MkII", 11210: "Cruiser MkII", 11211: "Imp.Lab", 11212: "Plasma T.",
+        11213: "Low-Temp", 11214: "Bomb MkII", 11215: "Dest MkII", 11216: "BC MkII", 11217: "Robot", 11218: "Supercomp",
+        // Rocktal
+        12201: "Volcanic", 12202: "Depth Sd", 12203: "Acoustical", 12204: "HE Pump", 12205: "Cargo Exp", 12206: "Magma P.",
+        12207: "Geo.PP", 12208: "Depth MkII", 12209: "Ion Cryst", 12210: "Diamond Tr", 12211: "Obsidian", 12212: "Rune Shld",
+        12213: "Rock Coll", 12214: "Ion Armor", 12215: "Dia Focus", 12216: "Obs Over", 12217: "Rune Over", 12218: "Rock Over",
+        // Mecha
+        13201: "Catalyser", 13202: "Plasma Dr", 13203: "High Eff", 13204: "Dep.Uran", 13205: "Logic", 13206: "Auto Line",
+        13207: "Sensors", 13208: "PLC Net", 13209: "Nano Rep", 13210: "Auto Rep", 13211: "Psionic", 13212: "Telekin",
+        13213: "Sensing", 13214: "Graviton", 13215: "Psionic C", 13216: "Tele Dr", 13217: "6th Sense", 13218: "Psychohist",
+        // Kaelesh
+        14201: "Heat Rec", 14202: "Sulphide", 14203: "Psionic", 14204: "Teletrac", 14205: "Enh Sens", 14206: "Neuro",
+        14207: "High Sens", 14208: "PLC Net", 14209: "Nano Rep", 14210: "Auto Rep", 14211: "Psi Net", 14212: "Tele Beam",
+        14213: "Sensing", 14214: "Graviton", 14215: "Psi Comp", 14216: "Tele Dr", 14217: "6th Sense", 14218: "Psycho"
+    };
+
+    // User-verified LF Buildings with bonus mappings (from param_config.json)
+    const LF_BUILDINGS = {
+        rocktal: [
+            { id: 12106, name: 'Magma Forge', bonusType: 'metal', baseValue: 2, increaseFactor: 1 },
+            { id: 12109, name: 'Crystal Refinery', bonusType: 'crystal', baseValue: 2, increaseFactor: 1 },
+            { id: 12110, name: 'Deuterium Synth', bonusType: 'deut', baseValue: 2, increaseFactor: 1 }
+        ],
+        human: [
+            { id: 11106, name: 'High Energy Smelting', bonusType: 'metal', baseValue: 1.5, increaseFactor: 1 },
+            { id: 11108, name: 'Fusion-Powered Production', bonusType: 'crystal', baseValue: 1.5, increaseFactor: 1 }
+        ],
+        mecha: [
+            { id: 13110, name: 'High-Performance Synthesizer', bonusType: 'deut', baseValue: 2, increaseFactor: 1 }
+        ]
+    };
+
+    // User-verified LF Techs organized by position (each position can have different tech per lifeform)
+    // Players can choose ANY tech at each position, independent of active lifeform
+    const LF_TECHS_BY_POSITION = [
+        { pos: 1, name: 'Catalyzer', ids: { mecha: 13201 } },
+        { pos: 2, name: 'Extract/Sulf/Acoustic', ids: { human: 12212, kaelesh: 14202, rocktal: 12202 } },
+        { pos: 3, name: 'HE Pump', ids: { rocktal: 12203 } },
+        { pos: 5, name: 'Magma Prod', ids: { rocktal: 12205 } },
+        { pos: 6, name: 'Auto Trans', ids: { mecha: 13206 } },
+        { pos: 7, name: 'Depth Snd', ids: { rocktal: 12207 } },
+        { pos: 8, name: 'Enh Prod', ids: { human: 11208 } },
+        { pos: 10, name: 'Dia Drill', ids: { rocktal: 12210 } },
+        { pos: 11, name: 'Seismic', ids: { rocktal: 12211 } },
+        { pos: 12, name: 'M.Pump/Psycho', ids: { rocktal: 12212, kaelesh: 14212 } },
+        { pos: 13, name: 'AI Swarm', ids: { mecha: 13213 } }
+    ];
+
     // --- Data Fetcher ---
     class DataFetcher {
         constructor() {
@@ -30,7 +81,6 @@
         async fetchEmpireData() {
             try {
                 this.empireData = {};
-                // OGLight loops i=0 (Planets) and i=1 (Moons)
                 const types = [0, 1];
 
                 const promises = types.map(type =>
@@ -40,13 +90,12 @@
                         .then(res => res.json())
                         .then(json => {
                             if (json.mergedArray) {
-                                // OGLight logic: this.ogl._empire.update(JSON.parse(result.mergedArray), i)
-                                // mergedArray parses to { planets: [...] }
                                 const parsed = JSON.parse(json.mergedArray);
 
                                 if (parsed && parsed.planets) {
                                     parsed.planets.forEach(p => {
                                         if (p && p.id) {
+                                            p.isMoon = (type === 1);
                                             this.empireData[p.id] = p;
                                         }
                                     });
@@ -57,7 +106,7 @@
                 );
 
                 await Promise.all(promises);
-                console.log('ROI Advisor: Full Empire Data Fetched', this.empireData);
+                console.log('ROI Advisor: Empire Data Fetched', this.empireData);
                 return this.empireData;
             } catch (error) {
                 console.error('ROI Advisor: Critical Error fetching Empire Data', error);
@@ -310,10 +359,370 @@
                 return;
             }
 
-            // Estimate Plasma Level from first planet
-            // TODO: Ensure 122 is correct ID or scrape it properly
+            // Get Plasma Level and calculate resource-specific bonuses
             const firstPlanet = Object.values(data)[0];
             const plasmaLevel = firstPlanet ? (parseInt(firstPlanet['122']) || 0) : 0;
+
+            // Plasma bonuses are DIFFERENT per resource
+            const plasmaMetalBonus = plasmaLevel * 1;      // 1% per level for metal
+            const plasmaCrystalBonus = plasmaLevel * 0.66;  // 0.66% per level for crystal
+            const plasmaDeutBonus = plasmaLevel * 0.33;     // 0.33% per level for deut
+
+            // Get universe speed from meta tag
+            const universeSpeed = this.getUniverseSpeed();
+
+            // Calculate GLOBAL LF Tech bonuses (sum across ALL planets - techs apply account-wide)
+            const savedTechData = this.loadLFTechData();
+            let globalMetalTechBonus = 0;
+            let globalCrystalTechBonus = 0;
+            let globalDeutTechBonus = 0;
+
+            Object.values(data).forEach(planet => {
+                if (planet.isMoon) return;
+                const techBonuses = this.calculatePlanetTechBonuses(planet.id, savedTechData);
+                globalMetalTechBonus += techBonuses.metal;
+                globalCrystalTechBonus += techBonuses.crystal;
+                globalDeutTechBonus += techBonuses.deut;
+            });
+
+            // Display GLOBAL Tech Bonuses at top (Plasma + LF Techs)
+            const globalMetalBonus = plasmaMetalBonus + globalMetalTechBonus;
+            const globalCrystalBonus = plasmaCrystalBonus + globalCrystalTechBonus;
+            const globalDeutBonus = plasmaDeutBonus + globalDeutTechBonus;
+
+            const bonusSummary = document.createElement('div');
+            bonusSummary.style.cssText = 'padding:10px; margin-bottom:15px; background:#1a1a2e; border-radius:5px; display:flex; justify-content:space-around;';
+            bonusSummary.innerHTML = `
+                <div style="text-align:center;">
+                    <div style="font-size:10px; color:#888; margin-bottom:5px;">Universe Speed: ${universeSpeed}x</div>
+                </div>
+                <div style="text-align:center;">
+                    <div style="font-size:12px; color:#888; margin-bottom:5px;">Global Tech Bonus (Metal)</div>
+                    <div style="font-size:18px; font-weight:bold; color:#99cfff;">${globalMetalBonus.toFixed(2)}%</div>
+                    <div style="font-size:10px; color:#666;">Plasma: ${plasmaMetalBonus.toFixed(2)}% | LF Techs: ${globalMetalTechBonus.toFixed(2)}%</div>
+                </div>
+                <div style="text-align:center;">
+                    <div style="font-size:12px; color:#888; margin-bottom:5px;">Global Tech Bonus (Crystal)</div>
+                    <div style="font-size:18px; font-weight:bold; color:#a0ff99;">${globalCrystalBonus.toFixed(2)}%</div>
+                    <div style="font-size:10px; color:#666;">Plasma: ${plasmaCrystalBonus.toFixed(2)}% | LF Techs: ${globalCrystalTechBonus.toFixed(2)}%</div>
+                </div>
+                <div style="text-align:center;">
+                    <div style="font-size:12px; color:#888; margin-bottom:5px;">Global Tech Bonus (Deut)</div>
+                    <div style="font-size:18px; font-weight:bold; color:#ff9999;">${globalDeutBonus.toFixed(2)}%</div>
+                    <div style="font-size:10px; color:#666;">Plasma: ${plasmaDeutBonus.toFixed(2)}% | LF Techs: ${globalDeutTechBonus.toFixed(2)}%</div>
+                </div>
+            `;
+            container.appendChild(bonusSummary);
+
+            const table = document.createElement('table');
+            table.style.width = '100%';
+            table.style.borderCollapse = 'collapse';
+            table.style.fontSize = '11px';
+
+            const thead = document.createElement('thead');
+            thead.innerHTML = `
+                <tr>
+                    <th style="border: 1px solid #444; padding: 5px;">Planet</th>
+                    <th style="border: 1px solid #444; padding: 5px; color: #99cfff;">Metal Mine</th>
+                    <th style="border: 1px solid #444; padding: 5px; color: #a0ff99;">Crystal Mine</th>
+                    <th style="border: 1px solid #444; padding: 5px; color: #ff9999;">Deut Synth</th>
+                </tr>
+            `;
+            table.appendChild(thead);
+
+            const tbody = document.createElement('tbody');
+            Object.values(data).forEach(planet => {
+                if (planet.isMoon) return;
+
+                const m = parseInt(planet['1']) || 0;
+                const c = parseInt(planet['2']) || 0;
+                const d = parseInt(planet['3']) || 0;
+                const coords = planet.coordinates ? planet.coordinates.replace('[', '').replace(']', '') : '';
+
+                // Extract planet position from coordinates (e.g., "1:234:8" -> position 8)
+                const position = coords ? parseInt(coords.split(':')[2]) || 0 : 0;
+
+                // Get planet-specific building bonuses
+                const planetBuildingBonus = this.calculateLFBuildingBonuses(planet);
+
+                // Get position bonuses - these are now part of BASE, not bonuses
+                const positionBonus = this.getPositionBonus(position);
+
+                // Total DISPLAYED bonuses = Global Tech + Buildings (planet only)
+                // Position bonuses are NOT shown, they're built into base
+                const totalPlanetMetalBonus = globalMetalBonus + planetBuildingBonus.metal;
+                const totalPlanetCrystalBonus = globalCrystalBonus + planetBuildingBonus.crystal;
+                const totalPlanetDeutBonus = globalDeutBonus + planetBuildingBonus.deut;
+
+                // Base production formulas (per hour) - BEFORE universe speed
+                // Temperature and position effects are BUILT IN to base
+                const rawMetalProd = this.calculateBaseProduction(m, 1, planet);
+                const rawCrystalProd = this.calculateBaseProduction(c, 2, planet);
+                const rawDeutProd = this.calculateBaseProduction(d, 3, planet);
+
+                // Apply position bonuses to base (not shown as bonus)
+                const baseMetalProd = rawMetalProd * (1 + positionBonus.metal / 100);
+                const baseCrystalProd = rawCrystalProd * (1 + positionBonus.crystal / 100);
+                const baseDeutProd = rawDeutProd; // Temperature already in rawDeutProd
+
+                // Apply DISPLAYED bonuses (Plasma + LF Tech + LF Buildings)
+                const metalProdWithBonuses = baseMetalProd * (1 + totalPlanetMetalBonus / 100);
+                const crystalProdWithBonuses = baseCrystalProd * (1 + totalPlanetCrystalBonus / 100);
+                const deutProdWithBonuses = baseDeutProd * (1 + totalPlanetDeutBonus / 100);
+
+                // Apply universe speed multiplier
+                const currentMetalProd = metalProdWithBonuses * universeSpeed;
+                const currentCrystalProd = crystalProdWithBonuses * universeSpeed;
+                const currentDeutProd = deutProdWithBonuses * universeSpeed;
+
+                // Get temperature info for display
+                const tempInfo = this.getPlanetTempInfo(planet);
+
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td style="border: 1px solid #444; padding: 5px;">${planet.name} [${coords}]</td>
+                    <td style="border: 1px solid #444; padding: 5px;">
+                        <div style="font-weight:bold;">Level ${m}</div>
+                        <div style="font-size:10px; color:#888;">Base: ${this.formatNumber(baseMetalProd * universeSpeed)}/h</div>
+                        <div style="font-size:10px; color:#99cfff;">Current: ${this.formatNumber(currentMetalProd)}/h</div>
+                        <div style="font-size:9px; color:#666;">Bonus: +${totalPlanetMetalBonus.toFixed(1)}%</div>
+                    </td>
+                    <td style="border: 1px solid #444; padding: 5px;">
+                        <div style="font-weight:bold;">Level ${c}</div>
+                        <div style="font-size:10px; color:#888;">Base: ${this.formatNumber(baseCrystalProd * universeSpeed)}/h</div>
+                        <div style="font-size:10px; color:#a0ff99;">Current: ${this.formatNumber(currentCrystalProd)}/h</div>
+                        <div style="font-size:9px; color:#666;">Bonus: +${totalPlanetCrystalBonus.toFixed(1)}%</div>
+                    </td>
+                    <td style="border: 1px solid #444; padding: 5px;">
+                        <div style="font-weight:bold;">Level ${d}</div>
+                        <div style="font-size:10px; color:#888;">Base: ${this.formatNumber(baseDeutProd * universeSpeed)}/h (${tempInfo})</div>
+                        <div style="font-size:10px; color:#ff9999;">Current: ${this.formatNumber(currentDeutProd)}/h</div>
+                        <div style="font-size:9px; color:#666;">Bonus: +${totalPlanetDeutBonus.toFixed(1)}%</div>
+                    </td>
+                `;
+                tbody.appendChild(row);
+            });
+            table.appendChild(tbody);
+            container.appendChild(table);
+        }
+
+        getUniverseSpeed() {
+            // Try to read universe speed from OGame meta tag
+            const metaTag = document.querySelector('meta[name="ogame-universe-speed"]');
+            if (metaTag) {
+                const speed = parseInt(metaTag.getAttribute('content'));
+                return speed || 1;
+            }
+            // Fallback: try to get from game config
+            if (window.ogame && window.ogame.serverData && window.ogame.serverData.speed) {
+                return window.ogame.serverData.speed;
+            }
+            return 1; // Default to 1x if not found
+        }
+
+        getPlanetTemp(planet) {
+            // Try multiple temperature property names and formats
+            if (planet.temperatureMax !== undefined) {
+                return parseInt(planet.temperatureMax);
+            } else if (planet.temperature !== undefined) {
+                // temperature might be stored as a string like "10°C to 50°C" or just a number
+                if (typeof planet.temperature === 'string') {
+                    // Extract max temperature from string like "10°C to 50°C"
+                    const match = planet.temperature.match(/to\s+(\d+)/);
+                    if (match) {
+                        return parseInt(match[1]);
+                    } else {
+                        const tempMatch = planet.temperature.match(/(\d+)/);
+                        if (tempMatch) return parseInt(tempMatch[0]);
+                    }
+                } else {
+                    return parseInt(planet.temperature);
+                }
+            } else if (planet.fieldMax !== undefined) {
+                // Fallback estimation
+                return 50;
+            }
+            return 50; // default
+        }
+
+        getPlanetTempInfo(planet) {
+            // Get temperature info for display
+            if (planet.temperature !== undefined && typeof planet.temperature === 'string') {
+                // Extract both temperatures from string like "10°C to 50°C"
+                const matches = planet.temperature.match(/(-?\d+).*?(-?\d+)/);
+                if (matches && matches.length >= 3) {
+                    const minTemp = parseInt(matches[1]);
+                    const maxTemp = parseInt(matches[2]);
+                    const avgTemp = Math.round((minTemp + maxTemp) / 2);
+                    return `Avg: ${avgTemp}°C`;
+                }
+            } else if (planet.temperatureMin !== undefined && planet.temperatureMax !== undefined) {
+                const minTemp = parseInt(planet.temperatureMin);
+                const maxTemp = parseInt(planet.temperatureMax);
+                const avgTemp = Math.round((minTemp + maxTemp) / 2);
+                return `Avg: ${avgTemp}°C`;
+            } else if (planet.temperatureMax !== undefined) {
+                return `${planet.temperatureMax}°C`;
+            }
+            return 'Temp: ?';
+        }
+
+        getPositionBonus(position) {
+            // Position-based bonuses
+            const bonuses = { metal: 0, crystal: 0, deut: 0 };
+
+            // Crystal bonuses
+            if (position === 1) bonuses.crystal = 40;
+            else if (position === 2) bonuses.crystal = 30;
+            else if (position === 3) bonuses.crystal = 20;
+
+            // Metal bonuses
+            if (position === 6 || position === 10) bonuses.metal = 17;
+            else if (position === 7 || position === 9) bonuses.metal = 23;
+            else if (position === 8) bonuses.metal = 35;
+
+            return bonuses;
+        }
+
+        calculateLFBuildingBonuses(planet) {
+            let mB = 0, cB = 0, dB = 0;
+
+            // Detect Active Lifeform
+            const h1 = parseInt(planet['11101']) || 0;
+            const r1 = parseInt(planet['12101']) || 0;
+            const m1 = parseInt(planet['13101']) || 0;
+            const k1 = parseInt(planet['14101']) || 0;
+
+            let activeKey = '';
+            let maxTier1 = Math.max(h1, r1, m1, k1);
+            if (maxTier1 > 0) {
+                if (h1 === maxTier1) activeKey = 'human';
+                else if (r1 === maxTier1) activeKey = 'rocktal';
+                else if (m1 === maxTier1) activeKey = 'mecha';
+                else if (k1 === maxTier1) activeKey = 'kaelesh';
+            }
+
+            if (activeKey && LF_BUILDINGS[activeKey]) {
+                LF_BUILDINGS[activeKey].forEach(building => {
+                    const level = parseInt(planet[building.id]) || 0;
+                    if (level > 0) {
+                        const bonus = level * building.baseValue * building.increaseFactor;
+                        if (building.bonusType === 'metal') mB += bonus;
+                        else if (building.bonusType === 'crystal') cB += bonus;
+                        else if (building.bonusType === 'deut') dB += bonus;
+                    }
+                });
+            }
+
+            return { metal: mB, crystal: cB, deut: dB };
+        }
+
+        calculatePlanetTechBonuses(planetId, savedTechData) {
+            let mB = 0, cB = 0, dB = 0;
+
+            const planetData = savedTechData[planetId] || {};
+            const positions = [1, 2, 3, 5, 6, 7, 8, 10, 11, 12, 13];
+
+            positions.forEach(pos => {
+                const cellData = planetData[`pos${pos}`];
+                if (cellData && cellData.techId && cellData.level > 0) {
+                    const bonus = this.calculateTechBonus(cellData.techId, cellData.level);
+                    mB += bonus.metal || 0;
+                    cB += bonus.crystal || 0;
+                    dB += bonus.deut || 0;
+                }
+            });
+
+            return { metal: mB, crystal: cB, deut: dB };
+        }
+
+        calculateBaseProduction(level, mineType, planet) {
+            // OGame production formulas (per hour, assuming 100% power)
+            // Metal: 30 * level * 1.1^level
+            // Crystal: 20 * level * 1.1^level  
+            // Deuterium: A × (10 × L × 1.1^L) × (1.36 - 0.004 × T_avg)
+            //   where T_avg = average of min and max temperature
+
+            if (level === 0) return 0;
+
+            if (mineType === 1) { // Metal
+                return Math.floor(30 * level * Math.pow(1.1, level));
+            } else if (mineType === 2) { // Crystal
+                return Math.floor(20 * level * Math.pow(1.1, level));
+            } else if (mineType === 3) { // Deuterium
+                // Get average temperature (between min and max)
+                let avgTemp = 50; // default
+
+                if (planet.temperature !== undefined) {
+                    if (typeof planet.temperature === 'string') {
+                        // Extract both temperatures from string like "10°C to 50°C"
+                        const matches = planet.temperature.match(/(-?\d+).*?(-?\d+)/);
+                        if (matches && matches.length >= 3) {
+                            const minTemp = parseInt(matches[1]);
+                            const maxTemp = parseInt(matches[2]);
+                            avgTemp = (minTemp + maxTemp) / 2;
+                        }
+                    } else {
+                        avgTemp = parseInt(planet.temperature);
+                    }
+                } else if (planet.temperatureMin !== undefined && planet.temperatureMax !== undefined) {
+                    avgTemp = (parseInt(planet.temperatureMin) + parseInt(planet.temperatureMax)) / 2;
+                } else if (planet.temperatureMax !== undefined) {
+                    // Estimate: assume min is max - 40
+                    const maxTemp = parseInt(planet.temperatureMax);
+                    avgTemp = maxTemp - 20; // rough average
+                }
+
+                // Corrected formula: A × (10 × L × 1.1^L) × (1.36 - 0.004 × T_avg)
+                // Note: A (universe speed) is applied later, not here
+                const tempFactor = 1.36 - (0.004 * avgTemp);
+                const base = 10;
+                return Math.floor(base * level * Math.pow(1.1, level) * tempFactor);
+            }
+            return 0;
+        }
+
+        formatNumber(num) {
+            if (num >= 1000000) return (num / 1000000).toFixed(2) + 'M';
+            if (num >= 1000) return (num / 1000).toFixed(1) + 'K';
+            return Math.floor(num).toString();
+        }
+
+        renderResearchTab(container) {
+            const data = this.dataFetcher.empireData;
+            const firstPlanet = Object.values(data || {})[0];
+            const plasmaLevel = firstPlanet ? (parseInt(firstPlanet['122']) || 0) : 0;
+
+            const mBonus = (plasmaLevel * 1).toFixed(0);
+            const cBonus = (plasmaLevel * 0.66).toFixed(2);
+            const dBonus = (plasmaLevel * 0.33).toFixed(2);
+
+            container.innerHTML = `
+                <h3>Research Levels</h3>
+                <div style="margin-top: 20px;">
+                    <strong>Plasma Technology:</strong> 
+                    <span style="font-size: 1.5em; color: #48bb78; margin-left: 10px;">${plasmaLevel}</span>
+                </div>
+                <div style="margin-top: 15px; display: flex; gap: 20px;">
+                    <div style="padding: 10px; background: #2d3748; border-radius: 5px;">
+                        <span style="color: #99cfff;">Metal Bonus:</span> <strong>${mBonus}%</strong>
+                    </div>
+                    <div style="padding: 10px; background: #2d3748; border-radius: 5px;">
+                        <span style="color: #a0ff99;">Crystal Bonus:</span> <strong>${cBonus}%</strong>
+                    </div>
+                    <div style="padding: 10px; background: #2d3748; border-radius: 5px;">
+                        <span style="color: #ff9999;">Deut Bonus:</span> <strong>${dBonus}%</strong>
+                    </div>
+                </div>
+            `;
+        }
+
+        renderLFBuildingsTab(container) {
+            const data = this.dataFetcher.empireData;
+            if (!data) {
+                container.innerHTML = 'No Data Available';
+                return;
+            }
 
             const table = document.createElement('table');
             table.style.width = '100%';
@@ -323,40 +732,69 @@
             thead.innerHTML = `
                 <tr>
                     <th style="border: 1px solid #444; padding: 5px;">Planet</th>
-                    <th style="border: 1px solid #444; padding: 5px; color: #99cfff;">Metal</th>
-                    <th style="border: 1px solid #444; padding: 5px; color: #a0ff99;">Crystal</th>
-                    <th style="border: 1px solid #444; padding: 5px; color: #ff9999;">Deuterium</th>
+                    <th style="border: 1px solid #444; padding: 5px;">Lifeform</th>
+                    <th style="border: 1px solid #444; padding: 5px;">Buildings</th>
+                    <th style="border: 1px solid #444; padding: 5px; color: #99cfff;">Metal Bonus</th>
+                    <th style="border: 1px solid #444; padding: 5px; color: #a0ff99;">Crystal Bonus</th>
+                    <th style="border: 1px solid #444; padding: 5px; color: #ff9999;">Deut Bonus</th>
                 </tr>
             `;
             table.appendChild(thead);
 
             const tbody = document.createElement('tbody');
             Object.values(data).forEach(planet => {
-                const m = parseInt(planet['1']) || 0;
-                const c = parseInt(planet['2']) || 0;
-                const d = parseInt(planet['3']) || 0;
+                if (planet.isMoon) return;
 
-                // Calc ROI
-                const roiM = this.calculator.calcROI(m, 1, planet, plasmaLevel);
-                const roiC = this.calculator.calcROI(c, 2, planet, plasmaLevel);
-                const roiD = this.calculator.calcROI(d, 3, planet, plasmaLevel);
+                // Detect Active Lifeform based on Tier 1 Building (11101, 12101, 13101, 14101)
+                const h1 = parseInt(planet['11101']) || 0;
+                const r1 = parseInt(planet['12101']) || 0;
+                const m1 = parseInt(planet['13101']) || 0;
+                const k1 = parseInt(planet['14101']) || 0;
+
+                let activeLifeform = 'None';
+                let activeKey = '';
+
+                // Determine active lifeform by highest tier 1 building
+                let maxTier1 = Math.max(h1, r1, m1, k1);
+                if (maxTier1 > 0) {
+                    if (h1 === maxTier1) { activeLifeform = 'Human'; activeKey = 'human'; }
+                    else if (r1 === maxTier1) { activeLifeform = 'Rocktal'; activeKey = 'rocktal'; }
+                    else if (m1 === maxTier1) { activeLifeform = 'Mecha'; activeKey = 'mecha'; }
+                    else if (k1 === maxTier1) { activeLifeform = 'Kaelesh'; activeKey = 'kaelesh'; }
+                }
+
+                let buildingsList = '';
+                let mB = 0, cB = 0, dB = 0;
+
+                // Calculate bonuses for each building
+                if (activeKey && LF_BUILDINGS[activeKey]) {
+                    LF_BUILDINGS[activeKey].forEach(building => {
+                        const level = parseInt(planet[building.id]) || 0;
+                        if (level > 0) {
+                            buildingsList += `<div>${building.name}: ${level}</div>`;
+
+                            // Calculate bonus: level * baseValue * increaseFactor
+                            // Formula: bonus = level * baseValue * increaseFactor
+                            const bonus = level * building.baseValue * building.increaseFactor;
+
+                            // Add to appropriate bonus total
+                            if (building.bonusType === 'metal') mB += bonus;
+                            else if (building.bonusType === 'crystal') cB += bonus;
+                            else if (building.bonusType === 'deut') dB += bonus;
+                        }
+                    });
+                }
 
                 const row = document.createElement('tr');
-                // Display: Level (ROI Days)
                 row.innerHTML = `
-                    <td style="border: 1px solid #444; padding: 5px;">${planet.name} [${planet.coordinates}]</td>
-                    <td style="border: 1px solid #444; padding: 5px;">
-                        <div style="font-weight:bold;">${m}</div>
-                        <div style="font-size: 0.9em; color: #888;">${roiM.roiDays.toFixed(1)}d</div>
+                    <td style="border: 1px solid #444; padding: 5px;">${planet.name || 'Unknown'}</td>
+                    <td style="border: 1px solid #444; padding: 5px; font-weight:bold;">${activeLifeform}</td>
+                    <td style="border: 1px solid #444; padding: 5px; font-size: 0.9em; vertical-align: top;">
+                        ${buildingsList || '<span style="color:#666">-</span>'}
                     </td>
-                    <td style="border: 1px solid #444; padding: 5px;">
-                        <div style="font-weight:bold;">${c}</div>
-                        <div style="font-size: 0.9em; color: #888;">${roiC.roiDays.toFixed(1)}d</div>
-                    </td>
-                    <td style="border: 1px solid #444; padding: 5px;">
-                        <div style="font-weight:bold;">${d}</div>
-                        <div style="font-size: 0.9em; color: #888;">${roiD.roiDays.toFixed(1)}d</div>
-                    </td>
+                    <td style="border: 1px solid #444; padding: 5px;">${mB}%</td>
+                    <td style="border: 1px solid #444; padding: 5px;">${cB}%</td>
+                    <td style="border: 1px solid #444; padding: 5px;">${dB}%</td>
                 `;
                 tbody.appendChild(row);
             });
@@ -364,85 +802,265 @@
             container.appendChild(table);
         }
 
-        renderResearchTab(container) {
-            const data = this.dataFetcher.empireData;
-            const firstPlanet = Object.values(data || {})[0];
-            const plasmaLevel = firstPlanet ? (firstPlanet['122'] || 0) : 'Unknown';
-            container.innerHTML = `
-                <h3>Research Levels</h3>
-                <div style="margin-top: 20px;">
-                    <strong>Plasma Technology:</strong> 
-                    <span style="font-size: 1.5em; color: #48bb78; margin-left: 10px;">${plasmaLevel}</span>
-                </div>
-            `;
-        }
-
-        renderLFBuildingsTab(container) {
-            const data = this.dataFetcher.empireData;
-            if (!data) return;
-            const table = document.createElement('table');
-            table.style.width = '100%';
-            table.style.borderCollapse = 'collapse';
-            table.innerHTML = `
-                <thead>
-                    <tr>
-                        <th style="border: 1px solid #444; padding: 5px;">Planet</th>
-                        <th style="border: 1px solid #444; padding: 5px; color: #d4a373;">Magma</th>
-                        <th style="border: 1px solid #444; padding: 5px; color: #d4a373;">Refinery</th>
-                        <th style="border: 1px solid #444; padding: 5px; color: #d4a373;">DeutSyn</th>
-                        <th style="border: 1px solid #444; padding: 5px; color: #a3b1d4;">Smelt</th>
-                        <th style="border: 1px solid #444; padding: 5px; color: #e5e5e5;">PerfSyn</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    ${Object.values(data).map(p => `
-                        <tr>
-                            <td style="border: 1px solid #444; padding: 5px;">${p.name}</td>
-                            <td style="border: 1px solid #444; padding: 5px;">${p['12103'] || 0}</td>
-                            <td style="border: 1px solid #444; padding: 5px;">${p['12104'] || 0}</td>
-                            <td style="border: 1px solid #444; padding: 5px;">${p['12105'] || 0}</td>
-                            <td style="border: 1px solid #444; padding: 5px;">${p['11103'] || 0}</td>
-                            <td style="border: 1px solid #444; padding: 5px;">${p['13103'] || 0}</td>
-                        </tr>
-                    `).join('')}
-                </tbody>
-            `;
-            container.appendChild(table);
-        }
-
         renderLFTechsTab(container) {
             const data = this.dataFetcher.empireData;
             if (!data) return;
+
+            // Header with Save button
+            const header = document.createElement('div');
+            header.style.cssText = 'display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;';
+            header.innerHTML = `
+                <div>
+                    <strong>LF Technologies (Manual Editor)</strong>
+                    <span id="lftech-save-status" style="margin-left:15px; font-size:11px; color:#888;"></span>
+                </div>
+                <button id="lftech-save-btn" style="padding:5px 15px; background:#4a9eff; color:white; border:none; border-radius:4px; cursor:pointer;">
+                    Save
+                </button>
+            `;
+            container.appendChild(header);
+
+            // Load saved data
+            const savedData = this.loadLFTechData();
+
+            // Build editable table
             const table = document.createElement('table');
-            table.style.width = '100%';
-            table.style.borderCollapse = 'collapse';
+            table.id = 'lftech-table';
+            table.style.cssText = 'width:100%; border-collapse:collapse; font-size:11px;';
 
-            let header = '<tr><th style="border: 1px solid #444; padding: 5px;">Planet</th>';
-            for (let i = 1; i <= 18; i++) header += `<th style="border: 1px solid #444; padding:2px; text-align:center; font-size:10px;">S${i}</th>`;
-            header += '</tr>';
+            // Table header
+            const positions = [1, 2, 3, 5, 6, 7, 8, 10, 11, 12, 13];
+            let thead = '<thead><tr><th style="border:1px solid #444; padding:5px;">Planet</th>';
+            positions.forEach(pos => {
+                thead += `<th style="border:1px solid #444; padding:4px; text-align:center;">P${pos}</th>`;
+            });
+            thead += '<th style="border:1px solid #444; padding:5px; background:#2a2a3e;">Metal %</th>';
+            thead += '<th style="border:1px solid #444; padding:5px; background:#2a2a3e;">Crystal %</th>';
+            thead += '<th style="border:1px solid #444; padding:5px; background:#2a2a3e;">Deut %</th>';
+            thead += '</tr></thead>';
 
-            const rows = Object.values(data).map(p => {
-                let r = `<tr><td style="border: 1px solid #444; padding: 5px;">${p.name}</td>`;
-                for (let i = 1; i <= 18; i++) {
-                    const h = 11200 + i, ro = 12200 + i, m = 13200 + i, k = 14200 + i;
-                    const val = p[h] || p[ro] || p[m] || p[k] || 0;
-                    let color = '#fff';
-                    if (p[h]) color = '#a3b1d4';
-                    else if (p[ro]) color = '#d4a373';
-                    else if (p[m]) color = '#e5e5e5';
-                    else if (p[k]) color = '#a2845e';
-                    r += `<td style="border: 1px solid #444; padding: 5px; text-align:center; color:${color};">${val}</td>`;
-                }
-                return r + '</tr>';
-            }).join('');
+            // Table body - one row per planet
+            let tbody = '<tbody>';
+            let grandTotalMetal = 0, grandTotalCrystal = 0, grandTotalDeut = 0;
 
-            table.innerHTML = `<thead>${header}</thead><tbody>${rows}</tbody>`;
+            Object.values(data).forEach(planet => {
+                if (planet.isMoon) return;
+
+                const planetId = planet.id;
+                const planetData = savedData[planetId] || {};
+
+                tbody += `<tr data-planet-id="${planetId}">`;
+                tbody += `<td style="border:1px solid #444; padding:5px; font-weight:bold;">${planet.name}</td>`;
+
+                let planetMetal = 0, planetCrystal = 0, planetDeut = 0;
+
+                positions.forEach(pos => {
+                    const cellData = planetData[`pos${pos}`] || { techId: null, level: 0 };
+                    const techs = this.getTechsForPosition(pos);
+
+                    tbody += `<td style="border:1px solid #444; padding:3px; text-align:center;">`;
+
+                    // Dropdown for tech selection
+                    tbody += `<select data-planet="${planetId}" data-pos="${pos}" style="width:90%; font-size:10px; margin-bottom:2px;">`;
+                    tbody += `<option value="">-</option>`;
+                    techs.forEach(tech => {
+                        const selected = cellData.techId == tech.id ? 'selected' : '';
+                        tbody += `<option value="${tech.id}" ${selected}>${tech.shortName}</option>`;
+                    });
+                    tbody += `</select><br/>`;
+
+                    // Level input
+                    tbody += `Lv<input type="number" min="0" max="20" value="${cellData.level || 0}" 
+                              data-planet="${planetId}" data-pos="${pos}" 
+                              style="width:40px; font-size:10px; text-align:center;" />`;
+
+                    tbody += `</td>`;
+
+                    // Calculate bonuses
+                    if (cellData.techId && cellData.level > 0) {
+                        const bonus = this.calculateTechBonus(cellData.techId, cellData.level);
+                        planetMetal += bonus.metal || 0;
+                        planetCrystal += bonus.crystal || 0;
+                        planetDeut += bonus.deut || 0;
+                    }
+                });
+
+                // Bonus columns
+                tbody += `<td style="border:1px solid #444; padding:5px; text-align:center; background-color:#1d1d2e;" class="bonus-metal">${planetMetal.toFixed(2)}</td>`;
+                tbody += `<td style="border:1px solid #444; padding:5px; text-align:center; background-color:#1d1d2e;" class="bonus-crystal">${planetCrystal.toFixed(2)}</td>`;
+                tbody += `<td style="border:1px solid #444; padding:5px; text-align:center; background-color:#1d1d2e;" class="bonus-deut">${planetDeut.toFixed(2)}</td>`;
+                tbody += `</tr>`;
+
+                grandTotalMetal += planetMetal;
+                grandTotalCrystal += planetCrystal;
+                grandTotalDeut += planetDeut;
+            });
+
+            // Grand Total Row
+            tbody += `<tr style="background:#2a3a4e; font-weight:bold;">`;
+            tbody += `<td style="border:1px solid #444; padding:5px;" colspan="${positions.length + 1}">GRAND TOTAL</td>`;
+            tbody += `<td id="grand-total-metal" style="border:1px solid #444; padding:5px; text-align:center;">${grandTotalMetal.toFixed(2)}</td>`;
+            tbody += `<td id="grand-total-crystal" style="border:1px solid #444; padding:5px; text-align:center;">${grandTotalCrystal.toFixed(2)}</td>`;
+            tbody += `<td id="grand-total-deut" style="border:1px solid #444; padding:5px; text-align:center;">${grandTotalDeut.toFixed(2)}</td>`;
+            tbody += `</tr>`;
+            tbody += '</tbody>';
+
+            table.innerHTML = thead + tbody;
             container.appendChild(table);
 
-            const legend = document.createElement('div');
-            legend.style.marginTop = '10px';
-            legend.innerHTML = 'Legend: <span style="color:#a3b1d4">Human</span>, <span style="color:#d4a373">Rocktal</span>, <span style="color:#e5e5e5">Mecha</span>, <span style="color:#a2845e">Kaelesh</span>';
-            container.appendChild(legend);
+            // Add event listeners for real-time bonus updates
+            this.attachLFTechEventListeners();
+
+            // Save button handler
+            document.getElementById('lftech-save-btn').addEventListener('click', () => {
+                this.saveLFTechData();
+            });
+        }
+
+        getTechsForPosition(pos) {
+            const techMap = {
+                1: [{ id: 13201, shortName: 'Catalyzer' }],
+                2: [
+                    { id: 12212, shortName: 'HP Extract' },
+                    { id: 14202, shortName: 'Sulfide' },
+                    { id: 12202, shortName: 'Acoustic' }
+                ],
+                3: [{ id: 12203, shortName: 'HE Pump' }],
+                5: [{ id: 12205, shortName: 'Magma Prod' }],
+                6: [{ id: 13206, shortName: 'Auto Trans' }],
+                7: [{ id: 12207, shortName: 'Depth Snd' }],
+                8: [{ id: 11208, shortName: 'Enh Prod' }],
+                10: [{ id: 12210, shortName: 'Diamond' }],
+                11: [{ id: 12211, shortName: 'Seismic' }],
+                12: [
+                    { id: 12212, shortName: 'Magma Pump' },
+                    { id: 14212, shortName: 'Psycho' }
+                ],
+                13: [{ id: 13213, shortName: 'AI Swarm' }]
+            };
+            return techMap[pos] || [];
+        }
+
+        calculateTechBonus(techId, level) {
+            // Bonus mapping based on param_config.json (bonus1BaseValue * level)
+            const techBonuses = {
+                12212: { metal: 0.06, crystal: 0.06, deut: 0.06 },  // High-Performance Extractors
+                14202: { deut: 0.08 },   // Sulfide Process 
+                12202: { crystal: 0.08 },  // Acoustic Scanning
+                12203: { deut: 0.08 },   // High Energy Pump
+                12205: { metal: 0.08, crystal: 0.08, deut: 0.08 },  // Magma-Powered Production
+                13201: { deut: 0.08 },  // Catalyzer Technology
+                13206: { metal: 0.08, crystal: 0.08, deut: 0.08 },// Automated Transport
+                11208: { metal: 0.06, crystal: 0.06, deut: 0.06 },  // Enhanced Production
+                14212: { metal: 0.06, crystal: 0.06, deut: 0.06 },// Psychoharmoniser
+                12207: { metal: 0.08 },  // Depth Sounding
+                12210: { metal: 0.08 },  // Diamond Drill Heads
+                12211: { crystal: 0.08 },  // Seismic Mining
+                13213: { metal: 0.06, crystal: 0.06, deut: 0.06 } // AI Swarm
+            };
+
+            const bonus = techBonuses[techId] || {};
+            return {
+                metal: (bonus.metal || 0) * level,
+                crystal: (bonus.crystal || 0) * level,
+                deut: (bonus.deut || 0) * level
+            };
+        }
+
+        attachLFTechEventListeners() {
+            const table = document.getElementById('lftech-table');
+            if (!table) return;
+
+            table.addEventListener('change', (e) => {
+                if (e.target.tagName === 'SELECT' || e.target.tagName === 'INPUT') {
+                    this.recalculateLFTechBonuses();
+                }
+            });
+        }
+
+        recalculateLFTechBonuses() {
+            const table = document.getElementById('lftech-table');
+            if (!table) return;
+
+            let grandMetal = 0, grandCrystal = 0, grandDeut = 0;
+
+            table.querySelectorAll('tbody tr[data-planet-id]').forEach(row => {
+                let planetMetal = 0, planetCrystal = 0, planetDeut = 0;
+
+                row.querySelectorAll('select').forEach(select => {
+                    const pos = select.getAttribute('data-pos');
+                    const techId = parseInt(select.value) || null;
+                    const levelInput = row.querySelector(`input[data-pos="${pos}"]`);
+                    const level = parseInt(levelInput?.value) || 0;
+
+                    if (techId && level > 0) {
+                        const bonus = this.calculateTechBonus(techId, level);
+                        planetMetal += bonus.metal || 0;
+                        planetCrystal += bonus.crystal || 0;
+                        planetDeut += bonus.deut || 0;
+                    }
+                });
+
+                row.querySelector('.bonus-metal').textContent = planetMetal.toFixed(2);
+                row.querySelector('.bonus-crystal').textContent = planetCrystal.toFixed(2);
+                row.querySelector('.bonus-deut').textContent = planetDeut.toFixed(2);
+
+                grandMetal += planetMetal;
+                grandCrystal += planetCrystal;
+                grandDeut += planetDeut;
+            });
+
+            document.getElementById('grand-total-metal').textContent = grandMetal.toFixed(2);
+            document.getElementById('grand-total-crystal').textContent = grandCrystal.toFixed(2);
+            document.getElementById('grand-total-deut').textContent = grandDeut.toFixed(2);
+        }
+
+        loadLFTechData() {
+            const storageKey = 'roiAdvisor_lfTechs';
+            const stored = localStorage.getItem(storageKey);
+            if (stored) {
+                try {
+                    const data = JSON.parse(stored);
+                    const statusEl = document.getElementById('lftech-save-status');
+                    if (statusEl && data.__timestamp) {
+                        statusEl.textContent = `Last saved: ${new Date(data.__timestamp).toLocaleString()}`;
+                    }
+                    return data;
+                } catch (e) {
+                    console.error('Failed to load LF tech data:', e);
+                }
+            }
+            return {};
+        }
+
+        saveLFTechData() {
+            const table = document.getElementById('lftech-table');
+            if (!table) return;
+
+            const data = { __timestamp: Date.now() };
+
+            table.querySelectorAll('tbody tr[data-planet-id]').forEach(row => {
+                const planetId = row.getAttribute('data-planet-id');
+                data[planetId] = {};
+
+                row.querySelectorAll('select').forEach(select => {
+                    const pos = select.getAttribute('data-pos');
+                    const techId = parseInt(select.value) || null;
+                    const levelInput = row.querySelector(`input[data-pos="${pos}"]`);
+                    const level = parseInt(levelInput?.value) || 0;
+
+                    data[planetId][`pos${pos}`] = { techId, level };
+                });
+            });
+
+            localStorage.setItem('roiAdvisor_lfTechs', JSON.stringify(data));
+
+            const statusEl = document.getElementById('lftech-save-status');
+            if (statusEl) {
+                statusEl.textContent = `Last saved: ${new Date().toLocaleString()}`;
+                statusEl.style.color = '#4a9eff';
+                setTimeout(() => { statusEl.style.color = '#888'; }, 2000);
+            }
         }
     }
 
