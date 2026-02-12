@@ -446,7 +446,7 @@
                 borderBottom: '1px solid #333'
             });
 
-            const tabs = ['OptiMine', 'Mines', 'Research', 'LF Buildings', 'LF Techs', 'About'];
+            const tabs = ['OptiMine', 'Mines', 'LF Buildings', 'LF Techs', 'About'];
             const contentContainer = document.createElement('div');
             Object.assign(contentContainer.style, {
                 flex: '1',
@@ -545,10 +545,9 @@
             switch (tabIndex) {
                 case 0: this.renderROIAdvisorTab(container); break;
                 case 1: this.renderMinesTab(container); break;
-                case 2: this.renderResearchTab(container); break;
-                case 3: this.renderLFBuildingsTab(container); break;
-                case 4: this.renderLFTechsTab(container); break;
-                case 5: this.renderAboutTab(container); break;
+                case 2: this.renderLFBuildingsTab(container); break;
+                case 3: this.renderLFTechsTab(container); break;
+                case 4: this.renderAboutTab(container); break;
             }
         }
 
@@ -561,6 +560,8 @@
                 <h3 style="color:#6fb1fc; margin-top:20px;">OptiMine Tab</h3>
                 <p>Displays the Return on Investment (ROI) in days and weeks for Buildings, Lifeform (LF) Buildings, and LF Technologies that directly impact mine production.</p>
                 <p><strong>ROI Calculation:</strong> <code>Cost (MSU) / Δ Daily Production (MSU)</code></p>
+                <p style="color:#6fb1fc; font-weight:bold; margin-top:10px;">MSU Conversion Ratios</p>
+                <p>You can customize the <strong>MSU Conversion Ratios</strong> at the top of the OptiMine tab. Adjusting these values allows you to tailor the ROI calculations to your specific universe economy or trading preferences.</p>
                 
                 <h4 style="margin-top:15px; color:#a0aec0;">How Returns are Computed:</h4>
                 <ul style="padding-left:20px;">
@@ -572,6 +573,9 @@
                     </li>
                     <li><strong>LF Technologies:</strong> The return is the percentage increase applied to the base values of <strong>all planets</strong> in your empire.
                         <br><i style="font-size:11px; color:#888;">Example: A 0.08% increase across 10 planets each producing 100 yields a total of 8 MSU.</i>
+                    </li>
+                    <li><strong>Plasma Technology:</strong> The return is calculated empire-wide. Each level adds 1% to Metal, 0.66% to Crystal, and 0.33% to Deuterium base production across all planets.
+                        <br><i style="font-size:11px; color:#888;">Note: The cost doubles every level (Base * 2^Level).</i>
                     </li>
                 </ul>
 
@@ -585,6 +589,17 @@
                 <div style="margin-top:25px; padding:10px; background:#2d3748; border-radius:5px; font-style:italic; border-left:4px solid #4a9eff;">
                     "I apologize for the inconvenience regarding the manual LF Tech setup." - Bel Veste
                 </div>
+
+                <h3 style="color:#6fb1fc; margin-top:30px; border-top:1px solid #333; padding-top:20px;">Future Roadmap & Current Limitations</h3>
+                <p style="color:#888; font-size:11px;">The following factors are not currently included in ROI calculations and are planned for future updates:</p>
+                <ul style="padding-left:20px; font-size:11px; color:#a0aec0;">
+                    <li><strong>Lifeform Experience:</strong> Bonus increases from LF experience levels are not yet factored in.</li>
+                    <li><strong>Energy Costs:</strong> Energy requirements for mines and buildings are not considered.</li>
+                    <li><strong>Construction Time:</strong> Building and research times are not factored into the return.</li>
+                    <li><strong>Crawlers:</strong> Production bonuses from crawlers are currently omitted.</li>
+                    <li><strong>Cost Reductions:</strong> Research/buildings that reduce costs (e.g., Megalith, MRC, Improved Stellarator, Metropolis) are not yet supported.</li>
+                    <li><strong>Temporal Bonuses:</strong> Temporary boosts like Officers and Items are omitted to focus on permanent investments.</li>
+                </ul>
             `;
             container.appendChild(helpContent);
         }
@@ -623,16 +638,42 @@
             `;
             container.appendChild(header);
 
+            // Filter Controls
+            const filterContainer = document.createElement('div');
+            filterContainer.style.cssText = 'margin-bottom:15px; padding:10px; background:#1a1a2e; border-radius:8px;';
+            filterContainer.innerHTML = `
+                <div style="display:flex; gap:15px; align-items:center; flex-wrap:wrap;">
+                    <div style="font-size:12px; color:#888; font-weight:bold;">Filter:</div>
+                    <label style="display:flex; align-items:center; gap:5px; cursor:pointer; font-size:11px;">
+                        <input type="checkbox" id="filter-mines" checked style="cursor:pointer;" />
+                        <span style="color:#cd7f32;">Mines</span>
+                    </label>
+                    <label style="display:flex; align-items:center; gap:5px; cursor:pointer; font-size:11px;">
+                        <input type="checkbox" id="filter-lfbuilding" checked style="cursor:pointer;" />
+                        <span style="color:#ffa500;">LF Building</span>
+                    </label>
+                    <label style="display:flex; align-items:center; gap:5px; cursor:pointer; font-size:11px;">
+                        <input type="checkbox" id="filter-lftech" checked style="cursor:pointer;" />
+                        <span style="color:#00d4ff;">LF Tech</span>
+                    </label>
+                    <label style="display:flex; align-items:center; gap:5px; cursor:pointer; font-size:11px;">
+                        <input type="checkbox" id="filter-plasma" checked style="cursor:pointer;" />
+                        <span style="color:#a855f7;">Plasma</span>
+                    </label>
+                </div>
+            `;
+            container.appendChild(filterContainer);
+
             // Calculate all ROI opportunities
             const opportunities = this.calculateAllROI(data, msuRatios);
 
             // Sort by ROI (ascending - best ROI first)
             opportunities.sort((a, b) => a.roiDays - b.roiDays);
 
-            // Take top 100
-            const topOpportunities = opportunities.slice(0, 100);
+            // Store all opportunities for filtering
+            const allOpportunities = opportunities;
 
-            // Display table
+            // Create table structure
             const table = document.createElement('table');
             table.style.cssText = 'width:100%; border-collapse:collapse; font-size:11px;';
 
@@ -654,25 +695,69 @@
             table.appendChild(thead);
 
             const tbody = document.createElement('tbody');
-            topOpportunities.forEach((opp, index) => {
-                const row = document.createElement('tr');
-                row.style.cssText = index % 2 === 0 ? 'background:#1a1a2e;' : '';
-                row.innerHTML = `
-                    <td style="border:1px solid #444; padding:8px; text-align:center; font-weight:bold;">${index + 1}</td>
-                    <td style="border:1px solid #444; padding:8px;">${opp.planetName}</td>
-                    <td style="border:1px solid #444; padding:8px; color:${opp.color};">${opp.type}</td>
-                    <td style="border:1px solid #444; padding:8px; text-align:center;">${opp.currentLevel}</td>
-                    <td style="border:1px solid #444; padding:8px; text-align:center;">${opp.nextLevel}</td>
-                    <td style="border:1px solid #444; padding:8px; text-align:right;">${this.formatNumber(opp.costMSU)}</td>
-                    <td style="border:1px solid #444; padding:8px; text-align:right;">${this.formatNumber(opp.prodIncreaseMSU)}</td>
-                    <td style="border:1px solid #444; padding:8px; text-align:right;">${this.formatNumber(opp.prodDailyMSU)}</td>
-                    <td style="border:1px solid #444; padding:8px; text-align:right; font-weight:bold; color:#4a9eff;">${opp.roiDays.toFixed(2)}</td>
-                    <td style="border:1px solid #444; padding:8px; text-align:right; font-weight:bold; color:#48bb78;">${(opp.roiDays / 7).toFixed(2)}</td>
-                `;
-                tbody.appendChild(row);
-            });
             table.appendChild(tbody);
             container.appendChild(table);
+
+            // Function to render table based on current filter state
+            const renderTable = () => {
+                const showMines = document.getElementById('filter-mines').checked;
+                const showLFBuilding = document.getElementById('filter-lfbuilding').checked;
+                const showLFTech = document.getElementById('filter-lftech').checked;
+                const showPlasma = document.getElementById('filter-plasma').checked;
+
+                // Categorize and filter opportunities
+                const filteredOpportunities = allOpportunities.filter(opp => {
+                    let category = '';
+                    if (opp.type.includes('Metal Mine') || opp.type.includes('Crystal Mine') || opp.type.includes('Deut Synth')) {
+                        category = 'mines';
+                    } else if (opp.type.includes('Tech: Plasma')) {
+                        category = 'plasma';
+                    } else if (opp.type.startsWith('Tech:')) {
+                        category = 'lftech';
+                    } else {
+                        category = 'lfbuilding';
+                    }
+
+                    if (category === 'mines' && showMines) return true;
+                    if (category === 'lfbuilding' && showLFBuilding) return true;
+                    if (category === 'lftech' && showLFTech) return true;
+                    if (category === 'plasma' && showPlasma) return true;
+                    return false;
+                });
+
+                // Take top 100 from filtered results
+                const topFiltered = filteredOpportunities.slice(0, 100);
+
+                // Clear and rebuild tbody
+                tbody.innerHTML = '';
+                topFiltered.forEach((opp, index) => {
+                    const row = document.createElement('tr');
+                    row.style.cssText = index % 2 === 0 ? 'background:#1a1a2e;' : '';
+                    row.innerHTML = `
+                        <td style="border:1px solid #444; padding:8px; text-align:center; font-weight:bold;">${index + 1}</td>
+                        <td style="border:1px solid #444; padding:8px;">${opp.planetName}</td>
+                        <td style="border:1px solid #444; padding:8px; color:${opp.color};">${opp.type}</td>
+                        <td style="border:1px solid #444; padding:8px; text-align:center;">${opp.currentLevel}</td>
+                        <td style="border:1px solid #444; padding:8px; text-align:center;">${opp.nextLevel}</td>
+                        <td style="border:1px solid #444; padding:8px; text-align:right;">${this.formatNumber(opp.costMSU)}</td>
+                        <td style="border:1px solid #444; padding:8px; text-align:right;">${this.formatNumber(opp.prodIncreaseMSU)}</td>
+                        <td style="border:1px solid #444; padding:8px; text-align:right;">${this.formatNumber(opp.prodDailyMSU)}</td>
+                        <td style="border:1px solid #444; padding:8px; text-align:right; font-weight:bold; color:#4a9eff;">${opp.roiDays.toFixed(2)}</td>
+                        <td style="border:1px solid #444; padding:8px; text-align:right; font-weight:bold; color:#48bb78;">${(opp.roiDays / 7).toFixed(2)}</td>
+                    `;
+                    tbody.appendChild(row);
+                });
+            };
+
+            // Initial render
+            renderTable();
+
+            // Filter event listeners
+            document.getElementById('filter-mines').addEventListener('change', renderTable);
+            document.getElementById('filter-lfbuilding').addEventListener('change', renderTable);
+            document.getElementById('filter-lftech').addEventListener('change', renderTable);
+            document.getElementById('filter-plasma').addEventListener('change', renderTable);
+
 
             // Save button event
             document.getElementById('save-msu-btn').addEventListener('click', () => {
@@ -732,10 +817,13 @@
                 `<div style="color:#f1c40f; font-weight:bold; font-size:11px;">Collector Class: +${enhancedClassBonus.toFixed(2)}% Bonus Applied (${baseClassBonus}% Base + ${globalCollectorTechBonus.toFixed(2)}% LF)</div>` :
                 `<div style="color:#888; font-size:11px;">Player Class: ${playerClass.charAt(0).toUpperCase() + playerClass.slice(1)}</div>`;
 
+            const plasmaDisplay = `<div style="color:#a855f7; font-weight:bold; font-size:11px; margin-top:3px;">Plasma Tech Level: ${plasmaLevel}</div>`;
+
             bonusSummary.innerHTML = `
                 <div style="text-align:center;">
                     <div style="font-size:10px; color:#888; margin-bottom:5px;">Universe Speed: ${universeSpeed}x</div>
                     ${classDisplay}
+                    ${plasmaDisplay}
                 </div>
                 <div style="text-align:center;">
                     <div style="font-size:12px; color:#888; margin-bottom:5px;">Global Tech Bonus (Metal)</div>
@@ -800,12 +888,12 @@
                 const rawCrystalProd = this.calculateBaseProduction(c, 2, planet);
                 const rawDeutProd = this.calculateBaseProduction(d, 3, planet);
 
-                // Apply position bonuses to base (not shown as bonus)
+                // Apply Position as part of the BASE production
                 const baseMetalProd = rawMetalProd * (1 + positionBonus.metal / 100);
                 const baseCrystalProd = rawCrystalProd * (1 + positionBonus.crystal / 100);
                 const baseDeutProd = rawDeutProd; // Temperature already in rawDeutProd
 
-                // Apply DISPLAYED bonuses (Plasma + LF Tech + LF Buildings)
+                // Apply DISPLAYED bonuses (Plasma + LF Tech + LF Buildings + Class) multiplicatively on the position-base
                 const metalProdWithBonuses = baseMetalProd * (1 + totalPlanetMetalBonus / 100);
                 const crystalProdWithBonuses = baseCrystalProd * (1 + totalPlanetCrystalBonus / 100);
                 const deutProdWithBonuses = baseDeutProd * (1 + totalPlanetDeutBonus / 100);
@@ -1101,6 +1189,40 @@
                 empireBaseDeut += rawD * universeSpeed;
             });
 
+            // PLASMA TECH ROI
+            const nextPlasmaLevel = plasmaLevel + 1;
+            // Cost = 2000 * 2^level Metal, 4000 * 2^level Crystal, 1000 * 2^level Deut
+            const plasmaCost = {
+                metal: 2000 * Math.pow(2, nextPlasmaLevel - 1),
+                crystal: 4000 * Math.pow(2, nextPlasmaLevel - 1),
+                deut: 1000 * Math.pow(2, nextPlasmaLevel - 1)
+            };
+            const costMSUPlasma = this.toMSU(plasmaCost.metal, plasmaCost.crystal, plasmaCost.deut, msuRatios);
+            const normalizedRatios = this.normalizeRatios(msuRatios);
+
+            // Yield = (Empire Base * 1% Metal, 0.66% Crystal, 0.33% Deut)
+            const plasmaYieldM = empireBaseMetal * 0.01;
+            const plasmaYieldC = empireBaseCrystal * 0.0066;
+            const plasmaYieldD = empireBaseDeut * 0.0033;
+            const prodIncreaseMSUPlasma = (plasmaYieldM * normalizedRatios.metal) + (plasmaYieldC * normalizedRatios.crystal) + (plasmaYieldD * normalizedRatios.deut);
+
+            if (prodIncreaseMSUPlasma > 0) {
+                const prodDailyMSUPlasma = prodIncreaseMSUPlasma * 24;
+                const roiDaysPlasma = costMSUPlasma / prodDailyMSUPlasma;
+
+                opportunities.push({
+                    planetName: 'Empire-wide',
+                    type: 'Tech: Plasma',
+                    color: '#a855f7',
+                    currentLevel: plasmaLevel,
+                    nextLevel: nextPlasmaLevel,
+                    costMSU: costMSUPlasma,
+                    prodIncreaseMSU: prodIncreaseMSUPlasma,
+                    prodDailyMSU: prodDailyMSUPlasma,
+                    roiDays: roiDaysPlasma
+                });
+            }
+
             // Process each planet
             Object.values(data).forEach(planet => {
                 if (planet.isMoon) return;
@@ -1266,13 +1388,13 @@
 
                 // LF BUILDING ROI CALCULATIONS
                 // BASE PRODUCTION FOR LF CALCULATIONS (includes position bonus and universe speed)
-                const rawMetalProd = this.calculateBaseProduction(metalLevel, 1, planet);
-                const rawCrystalProd = this.calculateBaseProduction(crystalLevel, 2, planet);
-                const rawDeutProd = this.calculateBaseProduction(parseInt(planet['3']) || 0, 3, planet);
+                const rawM = this.calculateBaseProduction(metalLevel, 1, planet);
+                const rawC = this.calculateBaseProduction(crystalLevel, 2, planet);
+                const rawD = this.calculateBaseProduction(deutLevel, 3, planet);
 
-                const baseMetalScaled = rawMetalProd * (1 + positionBonus.metal / 100) * universeSpeed;
-                const baseCrystalScaled = rawCrystalProd * (1 + positionBonus.crystal / 100) * universeSpeed;
-                const baseDeutScaled = rawDeutProd * universeSpeed;
+                const baseMetalScaled = rawM * (1 + positionBonus.metal / 100) * universeSpeed;
+                const baseCrystalScaled = rawC * (1 + positionBonus.crystal / 100) * universeSpeed;
+                const baseDeutScaled = rawD * universeSpeed;
 
                 // Process LF Buildings
                 const raceId = detectActiveRaceFromBuildings(planet);
@@ -1367,17 +1489,15 @@
             const positionBonus = this.getPositionBonus(position);
             const baseProduction = this.calculateBaseProduction(level, mineType, planet);
 
-            // Apply position bonus to base (built-in, not displayed separately)
-            let prodWithPosition = baseProduction;
-            if (mineType === 1) {
-                prodWithPosition = baseProduction * (1 + positionBonus.metal / 100);
-            } else if (mineType === 2) {
-                prodWithPosition = baseProduction * (1 + positionBonus.crystal / 100);
-            }
-            // Deut position bonus is via temperature, already in baseProduction
+            // In OGame, Position, Plasma, Geologist, Items, Class bonuses are all additive to each other
+            // However, Position bonus is often viewed as part of the core planet's base.
+            // Based on USER fix: Formula * (1 + PositionBonus) is the "Base" for other bonuses.
+            let positionBonusValue = 0;
+            if (mineType === 1) positionBonusValue = positionBonus.metal;
+            else if (mineType === 2) positionBonusValue = positionBonus.crystal;
 
-            // Apply displayed bonuses (Plasma + LF Tech + LF Buildings)
-            const prodWithBonuses = prodWithPosition * (1 + totalBonus / 100);
+            const baseWithPosition = baseProduction * (1 + positionBonusValue / 100);
+            const prodWithBonuses = baseWithPosition * (1 + totalBonus / 100);
 
             // Apply universe speed
             return prodWithBonuses * universeSpeed;
