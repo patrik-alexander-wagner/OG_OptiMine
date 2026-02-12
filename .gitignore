@@ -3,7 +3,7 @@
 
 # Except src directory and the script
 !src/
-!src/roi_advisor.user.js
+!src/Optimine.user.js
 
 # Keep README and .gitignore itself
 !README.md

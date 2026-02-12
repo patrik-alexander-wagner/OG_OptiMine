@@ -6,8 +6,8 @@
 // @author       Bel'Veste
 // @match        https://*.ogame.gameforge.com/*
 // @grant        none
-// @updateURL    https://raw.githubusercontent.com/patrik-alexander-wagner/OGprofitability/main/src/roi_advisor.user.js
-// @downloadURL  https://raw.githubusercontent.com/patrik-alexander-wagner/OGprofitability/main/src/roi_advisor.user.js
+// @updateURL    https://raw.githubusercontent.com/patrik-alexander-wagner/OGprofitability/main/src/Optimine.user.js
+// @downloadURL  https://raw.githubusercontent.com/patrik-alexander-wagner/OGprofitability/main/src/Optimine.user.js
 // @homepageURL  https://github.com/patrik-alexander-wagner/OGprofitability
 // ==/UserScript==
 
@@ -398,7 +398,8 @@
             });
 
             const title = document.createElement('h3');
-            title.innerText = 'OptiMine (v2.1) by Bel Veste';
+            const version = (typeof GM_info !== 'undefined' && GM_info.script) ? GM_info.script.version : '1.0.0';
+            title.innerText = `OptiMine (v${version}) by Bel Veste`;
             header.appendChild(title);
 
             const controls = document.createElement('div');
