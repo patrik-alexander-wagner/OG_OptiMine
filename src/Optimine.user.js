@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name        OG_Optimine
 // @namespace    https://github.com/patrik-alexander-wagner/OG_OptiMine
-// @version      1.0.0
+// @version      1.0.4
 // @description  ROI recommendations for buildings/tech/LF
 // @author       Bel'Veste
 // @match        https://*.ogame.gameforge.com/*
@@ -202,29 +202,112 @@
             this.lfBonuses = {};
         }
 
+        // Parses the standalone Empire View page (a Document, not a string --
+        // see loadStandaloneEmpireDoc for why) into the same per-planet shape
+        // the rest of the script expects (numeric tech/building IDs as keys,
+        // plus id/name/coordinates/temperature/isMoon).
+        parseEmpireDoc(doc, isMoon) {
+            const planets = {};
+
+            doc.querySelectorAll('.planetWrapper > .planet[id^="planet"]').forEach(el => {
+                const id = parseInt(el.id.replace('planet', ''), 10);
+                if (!id) return;
+
+                const p = { id, isMoon };
+
+                const nameEl = el.querySelector('.planetname');
+                p.name = nameEl ? nameEl.textContent.trim() : '';
+
+                const coordsEl = el.querySelector('.planetDataTop .coords');
+                p.coordinates = coordsEl ? coordsEl.textContent.trim() : '';
+
+                const tempEl = el.querySelector('.planetDataBottom .fields');
+                p.temperature = tempEl ? tempEl.textContent.trim() : '';
+
+                // Each stat group (groupsupply, groupstation, groupdefence,
+                // groupresearch, groupships, groupliveform1buildings, ...)
+                // holds one <div class="<techId> even|odd"> per tech/building,
+                // whose current level lives in a <span class="disabled"> when
+                // present, otherwise as the cell's own text.
+                el.querySelectorAll('.values > div').forEach(cell => {
+                    const techId = cell.className.trim().split(/\s+/)[0];
+                    if (!/^\d+$/.test(techId)) return;
+
+                    const disabledSpan = cell.querySelector('span.disabled');
+                    let valueText;
+                    if (disabledSpan) {
+                        valueText = disabledSpan.textContent;
+                    } else {
+                        const textNode = Array.from(cell.childNodes)
+                            .find(n => n.nodeType === Node.TEXT_NODE && n.textContent.trim());
+                        valueText = textNode ? textNode.textContent : cell.textContent;
+                    }
+
+                    const num = parseInt(String(valueText).replace(/[^\d-]/g, ''), 10);
+                    p[techId] = isNaN(num) ? 0 : num;
+                });
+
+                planets[id] = p;
+            });
+
+            return planets;
+        }
+
+        // OGame serves the real standalone Empire page only to genuine
+        // top-level/frame navigations (it falls back to an empty shell for
+        // plain fetch()/XHR requests, presumably an anti-scraping check on
+        // Sec-Fetch-Dest, which browsers don't let scripts override). So we
+        // load it into a hidden same-origin iframe and parse it there.
+        // The parsing MUST happen synchronously inside onload, before the
+        // iframe is removed -- deferring it to a .then() callback (a
+        // microtask) runs after cleanup and sees an emptied-out document.
+        loadEmpirePlanets(planetType, isMoon) {
+            return new Promise((resolve, reject) => {
+                const iframe = document.createElement('iframe');
+                iframe.style.cssText = 'position:fixed;width:0;height:0;border:0;opacity:0;pointer-events:none;';
+
+                const cleanup = () => { if (iframe.parentNode) iframe.parentNode.removeChild(iframe); };
+                const timeoutId = setTimeout(() => {
+                    cleanup();
+                    reject(new Error('Timeout loading empire page'));
+                }, 15000);
+
+                // Appending an iframe fires a "load" event for its initial
+                // about:blank document. Attach handlers only after that
+                // append (and only start navigating after they're attached),
+                // so we don't resolve early on the blank placeholder.
+                document.body.appendChild(iframe);
+
+                iframe.onload = () => {
+                    clearTimeout(timeoutId);
+                    try {
+                        const planets = this.parseEmpireDoc(iframe.contentDocument, isMoon);
+                        cleanup();
+                        resolve(planets);
+                    } catch (e) {
+                        cleanup();
+                        reject(e);
+                    }
+                };
+                iframe.onerror = () => {
+                    clearTimeout(timeoutId);
+                    cleanup();
+                    reject(new Error('Failed to load empire page'));
+                };
+
+                iframe.src = `/game/index.php?page=standalone&component=empire&planetType=${planetType}`;
+            });
+        }
+
         async fetchEmpireData() {
             try {
                 this.empireData = {};
                 const types = [0, 1];
 
                 const promises = types.map(type =>
-                    fetch(`/game/index.php?page=ajax&component=empire&ajax=1&planetType=${type}&asJson=1`, {
-                        headers: { "X-Requested-With": "XMLHttpRequest" }
-                    })
-                        .then(res => res.json())
-                        .then(json => {
-                            if (json.mergedArray) {
-                                const parsed = JSON.parse(json.mergedArray);
-
-                                if (parsed && parsed.planets) {
-                                    parsed.planets.forEach(p => {
-                                        if (p && p.id) {
-                                            p.isMoon = (type === 1);
-                                            this.empireData[p.id] = p;
-                                        }
-                                    });
-                                }
-                            }
+                    this.loadEmpirePlanets(type, type === 1)
+                        .then(planets => {
+                            Object.assign(this.empireData, planets);
                         })
                         .catch(err => console.error(`OptiMine: Error fetching type ${type}`, err))
                 );
