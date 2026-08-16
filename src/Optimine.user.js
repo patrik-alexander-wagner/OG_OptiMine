@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name        OG_Optimine
 // @namespace    https://github.com/patrik-alexander-wagner/OG_OptiMine
-// @version      1.0.3
+// @version      1.0.4
 // @description  ROI recommendations for buildings/tech/LF
 // @author       Bel'Veste
 // @match        https://*.ogame.gameforge.com/*
@@ -272,6 +272,12 @@
                     reject(new Error('Timeout loading empire page'));
                 }, 15000);
 
+                // Appending an iframe fires a "load" event for its initial
+                // about:blank document. Attach handlers only after that
+                // append (and only start navigating after they're attached),
+                // so we don't resolve early on the blank placeholder.
+                document.body.appendChild(iframe);
+
                 iframe.onload = () => {
                     clearTimeout(timeoutId);
                     try {
@@ -289,7 +295,6 @@
                     reject(new Error('Failed to load empire page'));
                 };
 
-                document.body.appendChild(iframe);
                 iframe.src = `/game/index.php?page=standalone&component=empire&planetType=${planetType}`;
             });
         }
