@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name        OG_Optimine
 // @namespace    https://github.com/patrik-alexander-wagner/OG_OptiMine
-// @version      1.0.2
+// @version      1.0.3
 // @description  ROI recommendations for buildings/tech/LF
 // @author       Bel'Veste
 // @match        https://*.ogame.gameforge.com/*
@@ -257,9 +257,11 @@
         // top-level/frame navigations (it falls back to an empty shell for
         // plain fetch()/XHR requests, presumably an anti-scraping check on
         // Sec-Fetch-Dest, which browsers don't let scripts override). So we
-        // load it into a hidden same-origin iframe instead and read its
-        // parsed document directly.
-        loadStandaloneEmpireDoc(planetType) {
+        // load it into a hidden same-origin iframe and parse it there.
+        // The parsing MUST happen synchronously inside onload, before the
+        // iframe is removed -- deferring it to a .then() callback (a
+        // microtask) runs after cleanup and sees an emptied-out document.
+        loadEmpirePlanets(planetType, isMoon) {
             return new Promise((resolve, reject) => {
                 const iframe = document.createElement('iframe');
                 iframe.style.cssText = 'position:fixed;width:0;height:0;border:0;opacity:0;pointer-events:none;';
@@ -273,11 +275,12 @@
                 iframe.onload = () => {
                     clearTimeout(timeoutId);
                     try {
-                        resolve(iframe.contentDocument);
-                    } catch (e) {
-                        reject(e);
-                    } finally {
+                        const planets = this.parseEmpireDoc(iframe.contentDocument, isMoon);
                         cleanup();
+                        resolve(planets);
+                    } catch (e) {
+                        cleanup();
+                        reject(e);
                     }
                 };
                 iframe.onerror = () => {
@@ -297,9 +300,8 @@
                 const types = [0, 1];
 
                 const promises = types.map(type =>
-                    this.loadStandaloneEmpireDoc(type)
-                        .then(doc => {
-                            const planets = this.parseEmpireDoc(doc, type === 1);
+                    this.loadEmpirePlanets(type, type === 1)
+                        .then(planets => {
                             Object.assign(this.empireData, planets);
                         })
                         .catch(err => console.error(`OptiMine: Error fetching type ${type}`, err))
