@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name        OG_Optimine
 // @namespace    https://github.com/patrik-alexander-wagner/OG_OptiMine
-// @version      1.0.0
+// @version      1.0.1
 // @description  ROI recommendations for buildings/tech/LF
 // @author       Bel'Veste
 // @match        https://*.ogame.gameforge.com/*
@@ -202,29 +202,71 @@
             this.lfBonuses = {};
         }
 
+        // Parses the standalone Empire View HTML page into the same per-planet
+        // shape the rest of the script expects (numeric tech/building IDs as
+        // keys, plus id/name/coordinates/temperature/isMoon).
+        parseEmpireHtml(html, isMoon) {
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(html, 'text/html');
+            const planets = {};
+
+            doc.querySelectorAll('.planetWrapper > .planet[id^="planet"]').forEach(el => {
+                const id = parseInt(el.id.replace('planet', ''), 10);
+                if (!id) return;
+
+                const p = { id, isMoon };
+
+                const nameEl = el.querySelector('.planetname');
+                p.name = nameEl ? nameEl.textContent.trim() : '';
+
+                const coordsEl = el.querySelector('.planetDataTop .coords');
+                p.coordinates = coordsEl ? coordsEl.textContent.trim() : '';
+
+                const tempEl = el.querySelector('.planetDataBottom .fields');
+                p.temperature = tempEl ? tempEl.textContent.trim() : '';
+
+                // Each stat group (groupsupply, groupstation, groupdefence,
+                // groupresearch, groupships, groupliveform1buildings, ...)
+                // holds one <div class="<techId> even|odd"> per tech/building,
+                // whose current level lives in a <span class="disabled"> when
+                // present, otherwise as the cell's own text.
+                el.querySelectorAll('.values > div').forEach(cell => {
+                    const techId = cell.className.trim().split(/\s+/)[0];
+                    if (!/^\d+$/.test(techId)) return;
+
+                    const disabledSpan = cell.querySelector('span.disabled');
+                    let valueText;
+                    if (disabledSpan) {
+                        valueText = disabledSpan.textContent;
+                    } else {
+                        const textNode = Array.from(cell.childNodes)
+                            .find(n => n.nodeType === Node.TEXT_NODE && n.textContent.trim());
+                        valueText = textNode ? textNode.textContent : cell.textContent;
+                    }
+
+                    const num = parseInt(String(valueText).replace(/[^\d-]/g, ''), 10);
+                    p[techId] = isNaN(num) ? 0 : num;
+                });
+
+                planets[id] = p;
+            });
+
+            return planets;
+        }
+
         async fetchEmpireData() {
             try {
                 this.empireData = {};
                 const types = [0, 1];
 
                 const promises = types.map(type =>
-                    fetch(`/game/index.php?page=ajax&component=empire&ajax=1&planetType=${type}&asJson=1`, {
+                    fetch(`/game/index.php?page=standalone&component=empire&planetType=${type}`, {
                         headers: { "X-Requested-With": "XMLHttpRequest" }
                     })
-                        .then(res => res.json())
-                        .then(json => {
-                            if (json.mergedArray) {
-                                const parsed = JSON.parse(json.mergedArray);
-
-                                if (parsed && parsed.planets) {
-                                    parsed.planets.forEach(p => {
-                                        if (p && p.id) {
-                                            p.isMoon = (type === 1);
-                                            this.empireData[p.id] = p;
-                                        }
-                                    });
-                                }
-                            }
+                        .then(res => res.text())
+                        .then(html => {
+                            const planets = this.parseEmpireHtml(html, type === 1);
+                            Object.assign(this.empireData, planets);
                         })
                         .catch(err => console.error(`OptiMine: Error fetching type ${type}`, err))
                 );
