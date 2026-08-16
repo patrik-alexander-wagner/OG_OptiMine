@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name        OG_Optimine
 // @namespace    https://github.com/patrik-alexander-wagner/OG_OptiMine
-// @version      1.0.1
+// @version      1.0.2
 // @description  ROI recommendations for buildings/tech/LF
 // @author       Bel'Veste
 // @match        https://*.ogame.gameforge.com/*
@@ -202,12 +202,11 @@
             this.lfBonuses = {};
         }
 
-        // Parses the standalone Empire View HTML page into the same per-planet
-        // shape the rest of the script expects (numeric tech/building IDs as
-        // keys, plus id/name/coordinates/temperature/isMoon).
-        parseEmpireHtml(html, isMoon) {
-            const parser = new DOMParser();
-            const doc = parser.parseFromString(html, 'text/html');
+        // Parses the standalone Empire View page (a Document, not a string --
+        // see loadStandaloneEmpireDoc for why) into the same per-planet shape
+        // the rest of the script expects (numeric tech/building IDs as keys,
+        // plus id/name/coordinates/temperature/isMoon).
+        parseEmpireDoc(doc, isMoon) {
             const planets = {};
 
             doc.querySelectorAll('.planetWrapper > .planet[id^="planet"]').forEach(el => {
@@ -254,18 +253,53 @@
             return planets;
         }
 
+        // OGame serves the real standalone Empire page only to genuine
+        // top-level/frame navigations (it falls back to an empty shell for
+        // plain fetch()/XHR requests, presumably an anti-scraping check on
+        // Sec-Fetch-Dest, which browsers don't let scripts override). So we
+        // load it into a hidden same-origin iframe instead and read its
+        // parsed document directly.
+        loadStandaloneEmpireDoc(planetType) {
+            return new Promise((resolve, reject) => {
+                const iframe = document.createElement('iframe');
+                iframe.style.cssText = 'position:fixed;width:0;height:0;border:0;opacity:0;pointer-events:none;';
+
+                const cleanup = () => { if (iframe.parentNode) iframe.parentNode.removeChild(iframe); };
+                const timeoutId = setTimeout(() => {
+                    cleanup();
+                    reject(new Error('Timeout loading empire page'));
+                }, 15000);
+
+                iframe.onload = () => {
+                    clearTimeout(timeoutId);
+                    try {
+                        resolve(iframe.contentDocument);
+                    } catch (e) {
+                        reject(e);
+                    } finally {
+                        cleanup();
+                    }
+                };
+                iframe.onerror = () => {
+                    clearTimeout(timeoutId);
+                    cleanup();
+                    reject(new Error('Failed to load empire page'));
+                };
+
+                document.body.appendChild(iframe);
+                iframe.src = `/game/index.php?page=standalone&component=empire&planetType=${planetType}`;
+            });
+        }
+
         async fetchEmpireData() {
             try {
                 this.empireData = {};
                 const types = [0, 1];
 
                 const promises = types.map(type =>
-                    fetch(`/game/index.php?page=standalone&component=empire&planetType=${type}`, {
-                        headers: { "X-Requested-With": "XMLHttpRequest" }
-                    })
-                        .then(res => res.text())
-                        .then(html => {
-                            const planets = this.parseEmpireHtml(html, type === 1);
+                    this.loadStandaloneEmpireDoc(type)
+                        .then(doc => {
+                            const planets = this.parseEmpireDoc(doc, type === 1);
                             Object.assign(this.empireData, planets);
                         })
                         .catch(err => console.error(`OptiMine: Error fetching type ${type}`, err))
