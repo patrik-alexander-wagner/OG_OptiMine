@@ -112,7 +112,7 @@
         12217: { name: "Rune Shields", baseCost: [500000, 300000, 200000], factorCost: 1.5, bonus: { type: 'none', base: 0.2, factor: 1 } },
         12218: { name: "Rock’tal Collector Enhancement", baseCost: [300000, 180000, 120000], factorCost: 1.7, bonus: { type: 'collector', base: 0.2, factor: 1 } },
         // Mecha
-        13201: { name: "Catalyser Technology", baseCost: [10000, 6000, 1000], factorCost: 1.5, bonus: { type: 'prod', base: 0.08, factor: 1 } },
+        13201: { name: "Catalyser Technology", baseCost: [10000, 6000, 1000], factorCost: 1.5, bonus: { type: 'deut-prod', base: 0.08, factor: 1 } },
         13202: { name: "Plasma Drive", baseCost: [7500, 12500, 5000], factorCost: 1.3, bonus: { type: 'speed', base: 0.2, factor: 1 } },
         13203: { name: "Efficiency Module", baseCost: [15000, 10000, 5000], factorCost: 1.5, bonus: { type: 'prod', base: 0.03, factor: 1 } },
         13204: { name: "Depot AI", baseCost: [20000, 15000, 7500], factorCost: 1.3, bonus: { type: 'none', base: 0.1, factor: 1 } },
