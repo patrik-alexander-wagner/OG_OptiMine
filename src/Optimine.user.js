@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name        OG_Optimine
 // @namespace    https://github.com/patrik-alexander-wagner/OG_OptiMine
-// @version      1.0.5
+// @version      1.0.6
 // @description  ROI recommendations for buildings/tech/LF
 // @author       Bel'Veste
 // @match        https://*.ogame.gameforge.com/*
@@ -168,6 +168,10 @@
             { id: 13110, name: 'High-Performance Synthesizer', bonusType: 'deut', baseValue: 2, increaseFactor: 1 }
         ]
     };
+
+    // Megalith (Rock'tal-only): reduces the cost of all LF buildings ON THE
+    // SAME PLANET by its level in percent (e.g. level 13 = 13% cheaper).
+    const MEGALITH_ID = 12108;
 
     // LF Building cost data from param_config.json
     const LF_BUILDING_COSTS = {
@@ -680,7 +684,7 @@
                     <li><strong>Energy Costs:</strong> Energy requirements for mines and buildings are not considered.</li>
                     <li><strong>Construction Time:</strong> Building and research times are not factored into the return.</li>
                     <li><strong>Crawlers:</strong> Production bonuses from crawlers are currently omitted.</li>
-                    <li><strong>Cost Reductions:</strong> Research/buildings that reduce costs (e.g., Megalith, MRC, Improved Stellarator, Metropolis) are not yet supported.</li>
+                    <li><strong>Cost Reductions:</strong> Megalith (Rock'tal) is factored in. MRC, Improved Stellarator, and Metropolis are not yet supported.</li>
                     <li><strong>Temporal Bonuses:</strong> Temporary boosts like Officers and Items are omitted to focus on permanent investments.</li>
                 </ul>
             `;
@@ -1485,12 +1489,16 @@
                 const activeKey = raceToKey[raceId] || '';
 
                 if (activeKey && LF_BUILDINGS[activeKey]) {
+                    // Rock'tal only; reads as 0 on other planets since they
+                    // have no Megalith level to report.
+                    const megalithLevel = parseInt(planet[MEGALITH_ID]) || 0;
+
                     LF_BUILDINGS[activeKey].forEach(building => {
                         const buildingLevel = parseInt(planet[building.id]) || 0;
                         const nextLevel = buildingLevel + 1;
 
-                        // Get cost for next level
-                        const buildingCost = this.getLFBuildingCost(building.id, nextLevel);
+                        // Get cost for next level (Megalith-discounted)
+                        const buildingCost = this.getLFBuildingCost(building.id, nextLevel, megalithLevel);
                         const costMSU = this.toMSU(buildingCost.metal, buildingCost.crystal, buildingCost.deut, msuRatios);
 
                         // Calculate production increase from building bonus
@@ -1586,17 +1594,20 @@
             return prodWithBonuses * universeSpeed;
         }
 
-        getLFBuildingCost(buildingId, level) {
+        getLFBuildingCost(buildingId, level, megalithLevel = 0) {
             // Cost formula: cost = baseCost * priceFactor^(L-1) * L
+            // Megalith (Rock'tal) cuts this by its own level in percent,
+            // e.g. Megalith level 13 = 13% cheaper, on that planet only.
             const costData = LF_BUILDING_COSTS[buildingId];
             if (!costData) return { metal: 0, crystal: 0, deut: 0 };
 
             const multiplier = Math.pow(costData.priceFactor, level - 1) * level;
+            const discount = Math.max(0, 1 - (megalithLevel / 100));
 
             return {
-                metal: Math.floor(costData.metal * multiplier),
-                crystal: Math.floor(costData.crystal * multiplier),
-                deut: Math.floor(costData.deut * multiplier)
+                metal: Math.floor(costData.metal * multiplier * discount),
+                crystal: Math.floor(costData.crystal * multiplier * discount),
+                deut: Math.floor(costData.deut * multiplier * discount)
             };
         }
 
