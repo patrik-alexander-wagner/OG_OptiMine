@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name        OG_Optimine
 // @namespace    https://github.com/patrik-alexander-wagner/OG_OptiMine
-// @version      1.0.6
+// @version      1.0.7
 // @description  ROI recommendations for buildings/tech/LF
 // @author       Bel'Veste
 // @match        https://*.ogame.gameforge.com/*
@@ -172,6 +172,14 @@
     // Megalith (Rock'tal-only): reduces the cost of all LF buildings ON THE
     // SAME PLANET by its level in percent (e.g. level 13 = 13% cheaper).
     const MEGALITH_ID = 12108;
+
+    // Mineral Research Centre (Rock'tal-only): reduces the cost of Metal
+    // Mine, Crystal Mine, and Deuterium Synthesizer ON THE SAME PLANET.
+    // Discount steps up every 2 levels: 1-2 => 1%, 3-4 => 2%, 5-6 => 3%, ...
+    const MRC_ID = 12111;
+    function getMRCDiscountPercent(level) {
+        return level > 0 ? Math.ceil(level / 2) : 0;
+    }
 
     // LF Building cost data from param_config.json
     const LF_BUILDING_COSTS = {
@@ -684,7 +692,7 @@
                     <li><strong>Energy Costs:</strong> Energy requirements for mines and buildings are not considered.</li>
                     <li><strong>Construction Time:</strong> Building and research times are not factored into the return.</li>
                     <li><strong>Crawlers:</strong> Production bonuses from crawlers are currently omitted.</li>
-                    <li><strong>Cost Reductions:</strong> Megalith (Rock'tal) is factored in. MRC, Improved Stellarator, and Metropolis are not yet supported.</li>
+                    <li><strong>Cost Reductions:</strong> Megalith and Mineral Research Centre (Rock'tal) are factored in. Improved Stellarator and Metropolis are not yet supported.</li>
                     <li><strong>Temporal Bonuses:</strong> Temporary boosts like Officers and Items are omitted to focus on permanent investments.</li>
                 </ul>
             `;
@@ -1392,9 +1400,13 @@
                 const totalCrystalBonus = plasmaCrystalBonus + globalCrystalTechBonus + planetBuildingBonus.crystal + enhancedClassBonus;
                 const totalDeutBonus = plasmaDeutBonus + globalDeutTechBonus + planetBuildingBonus.deut + enhancedClassBonus;
 
+                // Rock'tal only; reads as 0 on other planets since they have
+                // no Mineral Research Centre level to report.
+                const mrcLevel = parseInt(planet[MRC_ID]) || 0;
+
                 // METAL MINE ROI
                 const metalLevel = parseInt(planet['1']) || 0;
-                const metalCost = this.getMineCost(1, metalLevel + 1);
+                const metalCost = this.getMineCost(1, metalLevel + 1, mrcLevel);
                 const metalProdCurrent = this.calculateMineProduction(1, metalLevel, planet, position, totalMetalBonus, universeSpeed);
                 const metalProdNext = this.calculateMineProduction(1, metalLevel + 1, planet, position, totalMetalBonus, universeSpeed);
                 const metalProdIncrease = metalProdNext - metalProdCurrent;
@@ -1421,7 +1433,7 @@
 
                 // CRYSTAL MINE ROI
                 const crystalLevel = parseInt(planet['2']) || 0;
-                const crystalCost = this.getMineCost(2, crystalLevel + 1);
+                const crystalCost = this.getMineCost(2, crystalLevel + 1, mrcLevel);
                 const crystalProdCurrent = this.calculateMineProduction(2, crystalLevel, planet, position, totalCrystalBonus, universeSpeed);
                 const crystalProdNext = this.calculateMineProduction(2, crystalLevel + 1, planet, position, totalCrystalBonus, universeSpeed);
                 const crystalProdIncrease = crystalProdNext - crystalProdCurrent;
@@ -1448,7 +1460,7 @@
 
                 // DEUTERIUM SYNTHESIZER ROI
                 const deutLevel = parseInt(planet['3']) || 0;
-                const deutCost = this.getMineCost(3, deutLevel + 1);
+                const deutCost = this.getMineCost(3, deutLevel + 1, mrcLevel);
                 const deutProdCurrent = this.calculateMineProduction(3, deutLevel, planet, position, totalDeutBonus, universeSpeed);
                 const deutProdNext = this.calculateMineProduction(3, deutLevel + 1, planet, position, totalDeutBonus, universeSpeed);
                 const deutProdIncrease = deutProdNext - deutProdCurrent;
@@ -1552,25 +1564,33 @@
             return opportunities;
         }
 
-        getMineCost(mineType, level) {
+        getMineCost(mineType, level, mrcLevel = 0) {
             // Cost formulas for mines
+            let cost;
             if (mineType === 1) { // Metal
-                return {
-                    metal: Math.floor(60 * Math.pow(1.5, level - 1)),
-                    crystal: Math.floor(15 * Math.pow(1.5, level - 1))
+                cost = {
+                    metal: 60 * Math.pow(1.5, level - 1),
+                    crystal: 15 * Math.pow(1.5, level - 1)
                 };
             } else if (mineType === 2) { // Crystal
-                return {
-                    metal: Math.floor(48 * Math.pow(1.6, level - 1)),
-                    crystal: Math.floor(24 * Math.pow(1.6, level - 1))
+                cost = {
+                    metal: 48 * Math.pow(1.6, level - 1),
+                    crystal: 24 * Math.pow(1.6, level - 1)
                 };
             } else if (mineType === 3) { // Deuterium
-                return {
-                    metal: Math.floor(225 * Math.pow(1.5, level - 1)),
-                    crystal: Math.floor(75 * Math.pow(1.5, level - 1))
+                cost = {
+                    metal: 225 * Math.pow(1.5, level - 1),
+                    crystal: 75 * Math.pow(1.5, level - 1)
                 };
+            } else {
+                return { metal: 0, crystal: 0 };
             }
-            return { metal: 0, crystal: 0 };
+
+            const discount = Math.max(0, 1 - (getMRCDiscountPercent(mrcLevel) / 100));
+            return {
+                metal: Math.floor(cost.metal * discount),
+                crystal: Math.floor(cost.crystal * discount)
+            };
         }
 
         calculateMineProduction(mineType, level, planet, position, totalBonus, universeSpeed) {
